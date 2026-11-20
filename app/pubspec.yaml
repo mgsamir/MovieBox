@@ -1,5 +1,5 @@
-name: cinebox_ott
-description: CineBox OTT catalog app
+name: movie_box
+description: Movie Box OTT catalog app
 publish_to: "none"
 version: 1.0.0+1
 environment:
