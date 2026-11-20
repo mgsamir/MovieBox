@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../config.dart';
 import '../models/content_item.dart';
 import '../services/catalog_service.dart';
@@ -20,7 +21,25 @@ class _HomeScreenState extends State<HomeScreen> {
   final Set<String> saved = {};
   final Map<String,double> history = {};
 
-  @override void initState() { super.initState(); load(); }
+  @override void initState() { super.initState(); restoreLocalData(); load(); }
+  Future<void> restoreLocalData() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    setState(() {
+      saved.addAll(prefs.getStringList('moviebox.my_list') ?? const []);
+      for (final id in prefs.getStringList('moviebox.watch_history') ?? const []) { history[id] = .01; }
+      watchMode = prefs.getString('moviebox.watch_mode') ?? 'streaming';
+    });
+  }
+  Future<void> persistCollections() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList('moviebox.my_list', saved.toList());
+    await prefs.setStringList('moviebox.watch_history', history.keys.toList());
+  }
+  Future<void> toggleSaved(ContentItem item) async {
+    setState(() { if (!saved.add(item.id)) saved.remove(item.id); });
+    await persistCollections();
+  }
   Future<void> load() async {
     if (!AppConfig.hasSupabaseConfig) { setState(() { loading=false; error='Catalog connection is not configured. Add Supabase build secrets.'; }); return; }
     setState(() { loading=true; error=null; });
@@ -112,9 +131,9 @@ class _HomeScreenState extends State<HomeScreen> {
     menu(Icons.info_outline,'About MovieBox','Version 0.1.0',()=>info('About MovieBox','MovieBox for Android — movies, series and anime.'))
   ]);
   Widget menu(IconData icon,String title,String sub,VoidCallback tap)=>Container(margin:const EdgeInsets.only(bottom:9),decoration:BoxDecoration(color:panel,borderRadius:BorderRadius.circular(15)),child:ListTile(contentPadding:const EdgeInsets.symmetric(horizontal:16,vertical:5),leading:Icon(icon,color:Colors.white70,size:25),title:Text(title,style:const TextStyle(fontWeight:FontWeight.w700)),subtitle:Text(sub,style:const TextStyle(color:muted,fontSize:11)),trailing:const Icon(Icons.chevron_right,color:Colors.white60),onTap:tap));
-  void settings()=>Navigator.push(context,MaterialPageRoute(builder:(_)=>SettingsPage(mode:watchMode,onMode:(v)=>setState(()=>watchMode=v))));
+  void settings()=>Navigator.push(context,MaterialPageRoute(builder:(_)=>SettingsPage(mode:watchMode,onMode:(v) async {setState(()=>watchMode=v);final p=await SharedPreferences.getInstance();await p.setString('moviebox.watch_mode',v);})));
   void collection(String title,Set<String> ids){final list=catalog.where((e)=>ids.contains(e.id)).toList();Navigator.push(context,MaterialPageRoute(builder:(_)=>CollectionPage(title:title,items:list,onOpen:open)));}
-  void open(ContentItem item){setState(()=>history[item.id]=history[item.id]??.01);Navigator.push(context,MaterialPageRoute(builder:(_)=>DetailScreen(item:item)));}
+  void open(ContentItem item){setState(()=>history[item.id]=history[item.id]??.01);persistCollections();Navigator.push(context,MaterialPageRoute(builder:(_)=>DetailScreen(item:item,isSaved:saved.contains(item.id),onToggleSaved:()=>toggleSaved(item))));}
   Widget empty(IconData icon,String title,String text)=>Center(child:Column(mainAxisSize:MainAxisSize.min,children:[Icon(icon,color:mint,size:54),const SizedBox(height:14),Text(title,style:const TextStyle(fontSize:23,fontWeight:FontWeight.bold)),const SizedBox(height:7),Text(text,style:const TextStyle(color:muted))]));
   Widget message(String text,bool retry)=>Center(child:Padding(padding:const EdgeInsets.all(28),child:Column(mainAxisSize:MainAxisSize.min,children:[const Icon(Icons.cloud_off_outlined,size:42,color:muted),const SizedBox(height:12),Text(text,textAlign:TextAlign.center,style:const TextStyle(color:Colors.white70)),if(retry)TextButton.icon(onPressed:load,icon:const Icon(Icons.refresh),label:const Text('Try again'))])));
   void info(String title,String text)=>showDialog(context:context,builder:(_)=>AlertDialog(backgroundColor:panel,title:Text(title),content:Text(text),actions:[TextButton(onPressed:()=>Navigator.pop(context),child:const Text('OK'))]));
@@ -137,7 +156,7 @@ class _SettingsPageState extends State<SettingsPage>{
   @override Widget build(BuildContext context)=>Scaffold(backgroundColor:bg,appBar:AppBar(backgroundColor:bg,title:const Text('Settings')),body:ListView(padding:const EdgeInsets.all(16),children:[
     const Padding(padding:EdgeInsets.fromLTRB(4,8,4,12),child:Text('Your app and preferences',style:TextStyle(color:muted))),
     tile(Icons.notifications_none,'Notifications',trailing:Switch(value:notifications,activeColor:mint,onChanged:(v)=>setState(()=>notifications=v))),
-    tile(Icons.language,'Language',trailing:const Text('Device default',style:TextStyle(color:muted))),
+    tile(Icons.language,'Language',trailing:const Text('Device default',style:TextStyle(color:muted)),tap:languageOptions),
     tile(Icons.play_circle_outline,'Watch Options',trailing:Text(mode=='streaming'?'Streaming':'Download',style:const TextStyle(color:muted)),tap:watchOptions),
     const SizedBox(height:18),
     SwitchListTile(contentPadding:const EdgeInsets.symmetric(horizontal:12),tileColor:panel,activeColor:mint,value:background,onChanged:(v)=>setState(()=>background=v),title:const Text('Download in background')),
@@ -148,6 +167,7 @@ class _SettingsPageState extends State<SettingsPage>{
     const SizedBox(height:22),Container(height:52,decoration:BoxDecoration(borderRadius:BorderRadius.circular(12),gradient:const LinearGradient(colors:[blue,mint])),child:const Center(child:Text('MovieBox',style:TextStyle(color:Colors.black,fontWeight:FontWeight.w900,fontSize:17))))
   ]));
   Widget tile(IconData icon,String title,{Widget? trailing,VoidCallback? tap})=>Container(margin:const EdgeInsets.only(bottom:2),decoration:const BoxDecoration(color:panel),child:ListTile(leading:Icon(icon,color:Colors.white70),title:Text(title),trailing:trailing??const Icon(Icons.chevron_right,color:Colors.white54),onTap:tap));
+  void languageOptions()=>showModalBottomSheet(context:context,backgroundColor:panel,builder:(ctx)=>SafeArea(child:Column(mainAxisSize:MainAxisSize.min,children:[for(final lang in ['Device default','English','Hindi','Tamil','Telugu','Malayalam','Kannada','Bengali']) ListTile(title:Text(lang),onTap:()=>Navigator.pop(ctx))])));
   void watchOptions()=>showModalBottomSheet(context:context,backgroundColor:panel,builder:(ctx)=>StatefulBuilder(builder:(ctx,update)=>Padding(padding:const EdgeInsets.fromLTRB(20,20,20,30),child:Column(mainAxisSize:MainAxisSize.min,crossAxisAlignment:CrossAxisAlignment.start,children:[
     const Text('Watch Options',style:TextStyle(fontSize:20,fontWeight:FontWeight.bold)),const SizedBox(height:8),const Text('Choose how videos should open by default.',style:TextStyle(color:muted)),const SizedBox(height:16),
     RadioListTile<String>(value:'streaming',groupValue:mode,activeColor:mint,title:const Text('Streaming'),subtitle:const Text('Play videos online instantly'),onChanged:(v)=>update(()=>mode=v!)),
