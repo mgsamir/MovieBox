@@ -6,7 +6,10 @@ import 'player_screen.dart';
 class DetailScreen extends StatelessWidget {
   final ContentItem item;
 
-  const DetailScreen({super.key, required this.item});
+  final bool isSaved;
+  final VoidCallback? onToggleSaved;
+
+  const DetailScreen({super.key, required this.item, this.isSaved = false, this.onToggleSaved});
 
   @override
   Widget build(BuildContext context) {
@@ -33,7 +36,7 @@ class DetailScreen extends StatelessWidget {
               ),
             ),
           const SizedBox(height: 16),
-          Text(item.title, style: Theme.of(context).textTheme.headlineSmall),
+          Row(children:[Expanded(child:Text(item.title, style: Theme.of(context).textTheme.headlineSmall)),IconButton(tooltip:isSaved?'Remove from My List':'Add to My List',onPressed:onToggleSaved,icon:Icon(isSaved?Icons.bookmark:Icons.bookmark_border,color:isSaved?const Color(0xFF22D6A0):null))]),
           if (metadata.isNotEmpty) ...[
             const SizedBox(height: 8),
             Text(metadata.join('  •  '),
