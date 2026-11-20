@@ -26,7 +26,7 @@ class CatalogService {
       request = request.eq('content_type', type);
     }
     if (query.trim().isNotEmpty) {
-      request = request.ilike('title', '%\${query.trim()}%');
+      request = request.ilike('title', '%${query.trim()}%');
     }
 
     final rows = await request.order('title').limit(limit);
