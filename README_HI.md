@@ -1,4 +1,4 @@
-# CineBox OTT Starter (Hindi + English)
+# Movie Box — OTT Starter (Hindi + English)
 
 Android OTT catalog starter built with Flutter + Supabase.
 
