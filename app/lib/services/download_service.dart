@@ -203,102 +203,115 @@ class DownloadService extends ChangeNotifier {
 
   Future<void> _run(String id) async {
     if (!_activeIds.add(id)) return;
-    var task = _tasks.firstWhere((entry) => entry.id == id, orElse: () =>
-        const DownloadTask(id: '', title: '', url: '', path: '', status: 'deleted', received: 0, total: 0));
+    var task = _tasks.firstWhere(
+      (entry) => entry.id == id,
+      orElse: () => const DownloadTask(
+        id: '', title: '', url: '', path: '', status: 'deleted',
+        received: 0, total: 0,
+      ),
+    );
     if (task.id.isEmpty || task.status != 'queued') {
       _activeIds.remove(id);
       return;
     }
+
     final file = File(task.path);
     HttpClient? client;
+    RandomAccessFile? handle;
     try {
       await file.parent.create(recursive: true);
       var offset = await file.exists() ? await file.length() : 0;
 
-      client = HttpClient();
-      _clients[task.id] = client;
+      client = HttpClient()..connectionTimeout = const Duration(seconds: 25);
+      _clients[id] = client;
       task = task.copy(status: 'downloading', received: offset);
       _replace(task);
       await _persist();
 
       final request = await client.getUrl(Uri.parse(task.url));
       if (offset > 0) {
-        request.headers.set(HttpHeaders.rangeHeader, 'bytes=$offset-');
+        request.headers.set(HttpHeaders.rangeHeader, 'bytes=' + offset.toString() + '-');
       }
       final response = await request.close();
 
-      if (response.statusCode != HttpStatus.ok &&
-          response.statusCode != HttpStatus.partialContent) {
-        throw HttpException(
-          'Download server returned HTTP ${response.statusCode}.',
-        );
+      if (offset == 0 && response.statusCode != HttpStatus.ok) {
+        throw HttpException('Server returned HTTP ' + response.statusCode.toString() + '.');
       }
-
       if (offset > 0 && response.statusCode == HttpStatus.ok) {
-        // The server ignored Range; restart cleanly instead of appending a
-        // second copy of the entire video to the partial file.
         offset = 0;
         await file.writeAsBytes([], flush: true);
-      } else if (offset > 0 &&
-          response.statusCode == HttpStatus.partialContent) {
-        final contentRange =
-            response.headers.value(HttpHeaders.contentRangeHeader);
-        if (contentRange == null ||
-            !contentRange.startsWith('bytes $offset-')) {
-          throw HttpException('The server returned an invalid resume range.');
+      } else if (offset > 0 && response.statusCode == HttpStatus.partialContent) {
+        final contentRange = response.headers.value(HttpHeaders.contentRangeHeader);
+        final match = contentRange == null
+            ? null
+            : RegExp(r'^bytes (\d+)-(\d+)/(\d+|\*)$').firstMatch(contentRange);
+        if (match == null || int.parse(match.group(1)!) != offset) {
+          throw HttpException('Server returned an invalid resume range.');
         }
+      } else if (offset > 0) {
+        throw HttpException('Server cannot resume this download (HTTP ' +
+            response.statusCode.toString() + ').');
       }
 
-      final total = response.contentLength < 0
+      final contentRange = response.headers.value(HttpHeaders.contentRangeHeader);
+      final rangeMatch = contentRange == null
+          ? null
+          : RegExp(r'^bytes (\d+)-(\d+)/(\d+|\*)$').firstMatch(contentRange);
+      final rangeTotal = rangeMatch == null || rangeMatch.group(3) == '*'
           ? 0
-          : offset + response.contentLength;
+          : int.tryParse(rangeMatch.group(3)!) ?? 0;
+      final total = rangeTotal > 0
+          ? rangeTotal
+          : (response.contentLength < 0 ? 0 : offset + response.contentLength);
+
       task = task.copy(received: offset, total: total);
       _replace(task);
+      await _persist();
 
-      final handle = await file.open(mode: FileMode.append);
-      try {
-        await for (final chunk in response) {
-          final currentIndex =
-              _tasks.indexWhere((entry) => entry.id == task.id);
-          if (currentIndex < 0 ||
-              _tasks[currentIndex].status != 'downloading') {
-            break;
-          }
-          await handle.writeFrom(chunk);
-          final size = await file.length();
-          task = task.copy(received: size, total: total);
-          _replace(task);
-          if (size % (1024 * 1024) < chunk.length) await _persist();
+      handle = await file.open(mode: FileMode.append);
+      var lastPersistedBytes = offset;
+      await for (final chunk in response) {
+        final currentIndex = _tasks.indexWhere((entry) => entry.id == id);
+        if (currentIndex < 0 || _tasks[currentIndex].status != 'downloading') {
+          break;
         }
-      } finally {
-        await handle.flush();
-        await handle.close();
+        await handle.writeFrom(chunk);
+        final size = await file.length();
+        task = task.copy(received: size, total: total);
+        _replace(task);
+        if (size - lastPersistedBytes >= 1024 * 1024) {
+          lastPersistedBytes = size;
+          await _persist();
+        }
       }
+      await handle.flush();
+      await handle.close();
+      handle = null;
 
-      final latestIndex = _tasks.indexWhere((entry) => entry.id == task.id);
-      if (latestIndex >= 0 &&
-          _tasks[latestIndex].status == 'downloading') {
+      final latestIndex = _tasks.indexWhere((entry) => entry.id == id);
+      if (latestIndex >= 0 && _tasks[latestIndex].status == 'downloading') {
         final finalSize = await file.length();
         if (total > 0 && finalSize != total) {
-          throw HttpException(
-            'Download incomplete: received $finalSize of $total bytes.',
-          );
+          throw HttpException('Incomplete download: received ' +
+              finalSize.toString() + ' of ' + total.toString() + ' bytes.');
         }
-        task = task.copy(
+        _replace(task.copy(
           status: 'completed',
           received: finalSize,
           total: total > 0 ? total : finalSize,
-        );
-        _replace(task);
+        ));
         await _persist();
       }
     } catch (_) {
-      final index = _tasks.indexWhere((entry) => entry.id == task.id);
+      final index = _tasks.indexWhere((entry) => entry.id == id);
       if (index >= 0 && _tasks[index].status == 'downloading') {
         _replace(_tasks[index].copy(status: 'error'));
         await _persist();
       }
     } finally {
+      try {
+        await handle?.close();
+      } catch (_) {}
       client?.close(force: true);
       _clients.remove(id);
       _activeIds.remove(id);
