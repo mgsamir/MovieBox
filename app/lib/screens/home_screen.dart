@@ -1,6 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:webview_flutter/webview_flutter.dart';
 
 import '../config.dart';
 import '../models/content_item.dart';
@@ -24,15 +22,12 @@ class _HomeScreenState extends State<HomeScreen> {
   String _query = '';
   String _selectedType = 'all';
   List<ContentItem> _catalog = [];
-  List<String> _sources = [];
-  bool _loadingSources = true;
   bool _loadingCatalog = true;
   String? _catalogError;
 
   @override
   void initState() {
     super.initState();
-    _loadSources();
     _loadCatalog();
   }
 
@@ -69,87 +64,9 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> _loadSources() async {
-    final prefs = await SharedPreferences.getInstance();
-    if (!mounted) return;
-    setState(() {
-      _sources = prefs.getStringList('movie_box_sources') ?? [];
-      _loadingSources = false;
-    });
-  }
-
-  Future<void> _addSource() async {
-    final controller = TextEditingController();
-    final url = await showDialog<String>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        backgroundColor: _panel,
-        title: const Text('Add website link'),
-        content: TextField(
-          controller: controller,
-          keyboardType: TextInputType.url,
-          autofocus: true,
-          style: const TextStyle(color: Colors.white),
-          decoration: const InputDecoration(
-            hintText: 'https://example.com',
-            helperText: 'Add a website you are allowed to access',
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () =>
-                Navigator.pop(dialogContext, controller.text.trim()),
-            child: const Text('Save'),
-          ),
-        ],
-      ),
-    );
-    controller.dispose();
-    if (url == null || url.isEmpty) return;
-
-    final parsed = Uri.tryParse(url.contains('://') ? url : 'https://$url');
-    if (parsed == null ||
-        !parsed.hasAuthority ||
-        !['http', 'https'].contains(parsed.scheme)) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please enter a valid website URL.')),
-      );
-      return;
-    }
-
-    final normalized = parsed.toString();
-    if (_sources.contains(normalized)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('This website is already saved.')),
-      );
-      return;
-    }
-
-    final prefs = await SharedPreferences.getInstance();
-    final updated = [..._sources, normalized];
-    await prefs.setStringList('movie_box_sources', updated);
-    if (!mounted) return;
-    setState(() => _sources = updated);
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Website saved on this device.')),
-    );
-  }
-
-  Future<void> _removeSource(String url) async {
-    final updated = _sources.where((item) => item != url).toList();
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setStringList('movie_box_sources', updated);
-    if (mounted) setState(() => _sources = updated);
-  }
-
   @override
   Widget build(BuildContext context) {
-    final pages = [_home(), _downloads(), _sourcesPage(), _settings()];
+    final pages = [_home(), _downloads(), _settings()];
     return Scaffold(
       backgroundColor: _bg,
       body: SafeArea(child: pages[_tab]),
@@ -167,7 +84,6 @@ class _HomeScreenState extends State<HomeScreen> {
               icon: Icon(Icons.download_outlined),
               selectedIcon: Icon(Icons.download),
               label: 'Downloads'),
-          NavigationDestination(icon: Icon(Icons.link), label: 'Sources'),
           NavigationDestination(
               icon: Icon(Icons.settings_outlined),
               selectedIcon: Icon(Icons.settings),
@@ -233,20 +149,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                   ),
                 ),
-                const SizedBox(width: 10),
-                SizedBox(
-                  height: 52,
-                  width: 52,
-                  child: FilledButton(
-                    onPressed: _addSource,
-                    style: FilledButton.styleFrom(
-                      padding: EdgeInsets.zero,
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(16)),
-                    ),
-                    child: const Icon(Icons.add_link, size: 25),
-                  ),
-                ),
+
               ],
             ),
           ),
@@ -286,9 +189,9 @@ class _HomeScreenState extends State<HomeScreen> {
                   Align(
                     alignment: Alignment.bottomRight,
                     child: FilledButton.tonalIcon(
-                      onPressed: _addSource,
-                      icon: const Icon(Icons.add, size: 17),
-                      label: const Text('Add source'),
+                      onPressed: null,
+                      icon: const Icon(Icons.movie_outlined, size: 17),
+                      label: const Text('Explore catalog'),
                     ),
                   ),
                 ],
@@ -440,104 +343,6 @@ class _HomeScreenState extends State<HomeScreen> {
         'Offline downloads will be added in a later step.',
       );
 
-  Widget _sourcesPage() => Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 22, 12, 8),
-            child: Row(
-              children: [
-                const Expanded(
-                    child: Text('Website Sources',
-                        style: TextStyle(
-                            fontSize: 25, fontWeight: FontWeight.bold))),
-                IconButton(
-                  onPressed: _addSource,
-                  icon: const Icon(Icons.add_circle, color: _accent, size: 30),
-                ),
-              ],
-            ),
-          ),
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 20, vertical: 4),
-            child: Text(
-              'Save websites here and open them inside MovieBox. This does not automatically extract movie lists or video files.',
-              style: TextStyle(color: Colors.white60),
-            ),
-          ),
-          if (_loadingSources)
-            const Expanded(child: Center(child: CircularProgressIndicator()))
-          else if (_sources.isEmpty)
-            Expanded(
-              child: Center(
-                child: Padding(
-                  padding: const EdgeInsets.all(30),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(Icons.link, size: 52, color: _accent),
-                      const SizedBox(height: 14),
-                      const Text('No websites added yet',
-                          style: TextStyle(
-                              fontSize: 18, fontWeight: FontWeight.bold)),
-                      const SizedBox(height: 8),
-                      const Text('Tap + to add a website link.',
-                          style: TextStyle(color: Colors.white60)),
-                      const SizedBox(height: 18),
-                      FilledButton.icon(
-                        onPressed: _addSource,
-                        icon: const Icon(Icons.add),
-                        label: const Text('Add website'),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            )
-          else
-            Expanded(
-              child: ListView.builder(
-                padding: const EdgeInsets.all(14),
-                itemCount: _sources.length,
-                itemBuilder: (context, index) {
-                  final url = _sources[index];
-                  final uri = Uri.parse(url);
-                  return Card(
-                    color: _panel,
-                    child: ListTile(
-                      leading: const CircleAvatar(
-                        backgroundColor: Color(0xFF302344),
-                        child: Icon(Icons.language, color: _accent),
-                      ),
-                      title: Text(uri.host,
-                          maxLines: 1, overflow: TextOverflow.ellipsis),
-                      subtitle: Text(url,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                              color: Colors.white54, fontSize: 11)),
-                      onTap: () => Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                            builder: (_) => WebsitePage(url: url)),
-                      ),
-                      trailing: PopupMenuButton<String>(
-                        onSelected: (value) {
-                          if (value == 'delete') _removeSource(url);
-                        },
-                        itemBuilder: (_) => const [
-                          PopupMenuItem(
-                              value: 'delete', child: Text('Remove website')),
-                        ],
-                      ),
-                    ),
-                  );
-                },
-              ),
-            ),
-        ],
-      );
-
   Widget _settings() => ListView(
         padding: const EdgeInsets.all(20),
         children: [
@@ -575,75 +380,6 @@ class _HomeScreenState extends State<HomeScreen> {
         leading: Icon(icon, color: _accent),
         title: Text(title),
         subtitle: Text(subtitle, style: const TextStyle(color: Colors.white54)),
-      );
-}
-
-class WebsitePage extends StatefulWidget {
-  final String url;
-
-  const WebsitePage({super.key, required this.url});
-
-  @override
-  State<WebsitePage> createState() => _WebsitePageState();
-}
-
-class _WebsitePageState extends State<WebsitePage> {
-  late final WebViewController _controller;
-  int _progress = 0;
-  String? _error;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = WebViewController()
-      ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..setNavigationDelegate(
-        NavigationDelegate(
-          onProgress: (value) => setState(() => _progress = value),
-          onWebResourceError: (error) {
-            if (error.isForMainFrame == true) {
-              setState(() => _error = error.description);
-            }
-          },
-        ),
-      )
-      ..loadRequest(Uri.parse(widget.url));
-  }
-
-  @override
-  Widget build(BuildContext context) => Scaffold(
-        backgroundColor: _bg,
-        appBar: AppBar(
-          backgroundColor: _panel,
-          title: Text(Uri.parse(widget.url).host,
-              maxLines: 1, overflow: TextOverflow.ellipsis),
-          actions: [
-            IconButton(
-                onPressed: () => _controller.reload(),
-                icon: const Icon(Icons.refresh)),
-            IconButton(
-                onPressed: () => _controller.goBack(),
-                icon: const Icon(Icons.arrow_back)),
-          ],
-        ),
-        body: Column(
-          children: [
-            if (_progress < 100)
-              LinearProgressIndicator(
-                value: _progress / 100,
-                minHeight: 2,
-                color: _accent,
-                backgroundColor: _panel,
-              ),
-            if (_error != null)
-              Padding(
-                padding: const EdgeInsets.all(8),
-                child: Text('Page error: $_error',
-                    style: const TextStyle(color: Colors.orangeAccent)),
-              ),
-            Expanded(child: WebViewWidget(controller: _controller)),
-          ],
-        ),
       );
 }
 
