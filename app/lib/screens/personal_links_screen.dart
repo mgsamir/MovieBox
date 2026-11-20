@@ -160,7 +160,7 @@ class _PersonalLinksScreenState extends State<PersonalLinksScreen> {
         action: SnackBarAction(
           label: 'Undo',
           onPressed: () async {
-            setState(() => _links.insert(index.clamp(0, _links.length), removed));
+            setState(() => _links.insert(index.clamp(0, _links.length).toInt(), removed));
             await _saveLinks();
           },
         ),
