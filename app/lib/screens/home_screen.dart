@@ -186,12 +186,11 @@ class _HomeScreenState extends State<HomeScreen> {
                   const Text('One catalog for all your available languages',
                       style: TextStyle(color: Colors.white70, fontSize: 12)),
                   const Spacer(),
-                  Align(
+                  const Align(
                     alignment: Alignment.bottomRight,
-                    child: FilledButton.tonalIcon(
-                      onPressed: null,
-                      icon: const Icon(Icons.movie_outlined, size: 17),
-                      label: const Text('Explore catalog'),
+                    child: Text(
+                      'Discover your next favourite',
+                      style: TextStyle(color: Colors.white70, fontSize: 11),
                     ),
                   ),
                 ],
