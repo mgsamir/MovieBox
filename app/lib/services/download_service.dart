@@ -64,6 +64,7 @@ class DownloadService extends ChangeNotifier {
   final List<DownloadTask> _tasks = [];
   final Map<String, HttpClient> _clients = {};
   final Set<String> _activeIds = {};
+  Future<void> _persistQueue = Future<void>.value();
   bool _loaded = false;
 
   List<DownloadTask> get tasks => List.unmodifiable(_tasks);
@@ -75,13 +76,30 @@ class DownloadService extends ChangeNotifier {
     if (raw != null) {
       try {
         final decoded = jsonDecode(raw) as List;
-        _tasks.addAll(decoded.whereType<Map>().map(
-              (entry) => DownloadTask.fromJson(Map<String, dynamic>.from(entry)),
-            ));
-        for (var i = 0; i < _tasks.length; i++) {
-          if (_tasks[i].status == 'downloading') {
-            _tasks[i] = _tasks[i].copy(status: 'paused');
+        for (final entry in decoded.whereType<Map>()) {
+          final task = DownloadTask.fromJson(Map<String, dynamic>.from(entry));
+          if (task.id.isEmpty || task.path.isEmpty || task.url.isEmpty) continue;
+          var recovered = task;
+          if (task.status == 'downloading' || task.status == 'queued') {
+            recovered = task.copy(status: 'paused');
           }
+          try {
+            final file = File(task.path);
+            final actualBytes = await file.exists() ? await file.length() : 0;
+            if (recovered.status != 'completed') {
+              recovered = recovered.copy(received: actualBytes);
+              if (recovered.total > 0 && actualBytes >= recovered.total) {
+                recovered = recovered.copy(status: 'completed', received: recovered.total);
+              }
+            } else if (actualBytes == 0 && recovered.received > 0) {
+              recovered = recovered.copy(status: 'error', received: 0);
+            } else {
+              recovered = recovered.copy(received: actualBytes);
+            }
+          } catch (_) {
+            recovered = recovered.copy(status: 'error', received: 0);
+          }
+          _tasks.add(recovered);
         }
       } catch (_) {
         // Ignore malformed saved state rather than preventing the screen opening.
@@ -92,12 +110,16 @@ class DownloadService extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> _persist() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
-      _key,
-      jsonEncode(_tasks.map((task) => task.toJson()).toList()),
-    );
+  Future<void> _persist() {
+    // Serialize snapshots so an older async write cannot overwrite newer state.
+    _persistQueue = _persistQueue.catchError((_) {}).then((_) async {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        _key,
+        jsonEncode(_tasks.map((task) => task.toJson()).toList()),
+      );
+    });
+    return _persistQueue;
   }
 
   void _replace(DownloadTask task) {
@@ -142,17 +164,19 @@ class DownloadService extends ChangeNotifier {
 
     // Return immediately so the UI can show "Download started" while bytes
     // are transferred in the background.
-    unawaited(_run(task));
+    unawaited(_run(task.id));
   }
 
   Future<void> resume(String id) async {
     await load();
     final index = _tasks.indexWhere((entry) => entry.id == id);
-    if (index < 0 || _tasks[index].isComplete || _activeIds.contains(id)) {
-      return;
-    }
-    unawaited(_run(_tasks[index].copy(status: 'queued')));
+    if (index < 0 || _tasks[index].isComplete || _activeIds.contains(id)) return;
+    _replace(_tasks[index].copy(status: 'queued'));
+    await _persist();
+    unawaited(_run(id));
   }
+
+  Future<void> retry(String id) => resume(id);
 
   Future<void> pause(String id) async {
     final index = _tasks.indexWhere((entry) => entry.id == id);
@@ -177,10 +201,14 @@ class DownloadService extends ChangeNotifier {
     await _persist();
   }
 
-  Future<void> _run(DownloadTask initial) async {
-    if (!_activeIds.add(initial.id)) return;
-
-    var task = initial;
+  Future<void> _run(String id) async {
+    if (!_activeIds.add(id)) return;
+    var task = _tasks.firstWhere((entry) => entry.id == id, orElse: () =>
+        const DownloadTask(id: '', title: '', url: '', path: '', status: 'deleted', received: 0, total: 0));
+    if (task.id.isEmpty || task.status != 'queued') {
+      _activeIds.remove(id);
+      return;
+    }
     final file = File(task.path);
     HttpClient? client;
     try {
@@ -243,6 +271,7 @@ class DownloadService extends ChangeNotifier {
           if (size % (1024 * 1024) < chunk.length) await _persist();
         }
       } finally {
+        await handle.flush();
         await handle.close();
       }
 
@@ -271,8 +300,8 @@ class DownloadService extends ChangeNotifier {
       }
     } finally {
       client?.close(force: true);
-      _clients.remove(task.id);
-      _activeIds.remove(task.id);
+      _clients.remove(id);
+      _activeIds.remove(id);
     }
   }
 }
