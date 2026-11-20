@@ -3,8 +3,9 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'player_screen.dart';
 import '../services/download_service.dart';
+import '../services/video_link_resolver.dart';
+import 'player_screen.dart';
 
 const _linksBg = Color(0xFF101114);
 const _linksPanel = Color(0xFF1D1F23);
@@ -40,7 +41,8 @@ class _PersonalLinksScreenState extends State<PersonalLinksScreen> {
           .map((entry) => entry.map(
                 (key, value) => MapEntry(key.toString(), value.toString()),
               ))
-          .where((entry) => entry['title']?.isNotEmpty == true &&
+          .where((entry) =>
+              entry['title']?.isNotEmpty == true &&
               entry['url']?.isNotEmpty == true)
           .toList();
       _loading = false;
@@ -63,7 +65,7 @@ class _PersonalLinksScreenState extends State<PersonalLinksScreen> {
       builder: (dialogContext) => StatefulBuilder(
         builder: (dialogContext, refreshDialog) => AlertDialog(
           backgroundColor: _linksPanel,
-          title: const Text('Add your video link'),
+          title: const Text('Add your video or webpage link'),
           content: Form(
             key: formKey,
             child: SingleChildScrollView(
@@ -77,24 +79,26 @@ class _PersonalLinksScreenState extends State<PersonalLinksScreen> {
                       labelText: 'Title',
                       hintText: 'e.g. My saved movie',
                     ),
-                    validator: (value) => value == null || value.trim().isEmpty
-                        ? 'Enter a title'
-                        : null,
+                    validator: (value) =>
+                        value == null || value.trim().isEmpty
+                            ? 'Enter a title'
+                            : null,
                   ),
                   const SizedBox(height: 12),
                   TextFormField(
                     controller: urlController,
                     keyboardType: TextInputType.url,
                     decoration: const InputDecoration(
-                      labelText: 'Direct video URL',
-                      hintText: 'https://example.com/video.mp4',
+                      labelText: 'Video or webpage URL',
+                      hintText: 'https://example.com/watch/...',
                     ),
                     validator: (value) {
                       final uri = Uri.tryParse(value?.trim() ?? '');
                       if (uri == null ||
                           uri.scheme != 'https' ||
-                          uri.host.isEmpty) {
-                        return 'Enter a valid HTTPS video URL';
+                          uri.host.isEmpty ||
+                          uri.userInfo.isNotEmpty) {
+                        return 'Enter a valid HTTPS URL';
                       }
                       return null;
                     },
@@ -105,7 +109,8 @@ class _PersonalLinksScreenState extends State<PersonalLinksScreen> {
                     decoration: const InputDecoration(labelText: 'Category'),
                     items: const [
                       DropdownMenuItem(value: 'Movie', child: Text('Movie')),
-                      DropdownMenuItem(value: 'Web Series', child: Text('Web Series')),
+                      DropdownMenuItem(
+                          value: 'Web Series', child: Text('Web Series')),
                       DropdownMenuItem(value: 'Anime', child: Text('Anime')),
                       DropdownMenuItem(value: 'Other', child: Text('Other')),
                     ],
@@ -114,7 +119,7 @@ class _PersonalLinksScreenState extends State<PersonalLinksScreen> {
                   ),
                   const SizedBox(height: 8),
                   const Text(
-                    'Use a direct video stream URL that you own or are authorized to watch. Ordinary webpage links are not playable here.',
+                    'MovieBox checks public webpage video tags and supported metadata for a direct video stream. Sign-in, DRM-protected and unsupported embedded players may not work.',
                     style: TextStyle(color: _linksMuted, fontSize: 12),
                   ),
                 ],
@@ -161,7 +166,8 @@ class _PersonalLinksScreenState extends State<PersonalLinksScreen> {
         action: SnackBarAction(
           label: 'Undo',
           onPressed: () async {
-            setState(() => _links.insert(index.clamp(0, _links.length).toInt(), removed));
+            setState(() => _links.insert(
+                index.clamp(0, _links.length).toInt(), removed));
             await _saveLinks();
           },
         ),
@@ -169,22 +175,53 @@ class _PersonalLinksScreenState extends State<PersonalLinksScreen> {
     );
   }
 
-  Future<void> _download(Map<String,String> link) async {
+  void _showMessage(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _download(Map<String, String> link) async {
+    _showMessage('Checking webpage for a video source...');
     try {
-      await DownloadService.instance.download(title: link['title'] ?? 'Video', url: link['url']!);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Download started: ${link['title']}')));
+      final source = await VideoLinkResolver.resolve(link['url']!);
+      if (!source.canDownload) {
+        throw const FormatException(
+          'This page provides an HLS stream. Online playback may work, but offline download for this stream format is not supported yet.',
+        );
+      }
+      await DownloadService.instance.download(
+        title: link['title'] ?? 'Video',
+        url: source.uri.toString(),
+      );
+      _showMessage('Download started: ${link['title']}');
     } catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not download: $error')));
+      _showMessage('Could not download: ${_friendlyError(error)}');
     }
   }
 
-  void _play(String url) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => PlayerScreen(url: url)),
-    );
+  Future<void> _play(Map<String, String> link) async {
+    _showMessage('Finding a playable video on this link...');
+    try {
+      final source = await VideoLinkResolver.resolve(link['url']!);
+      if (!mounted) return;
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => PlayerScreen(url: source.uri.toString()),
+        ),
+      );
+    } catch (error) {
+      _showMessage('Could not play: ${_friendlyError(error)}');
+    }
+  }
+
+  String _friendlyError(Object error) {
+    final message = error.toString();
+    return message.startsWith('FormatException: ')
+        ? message.substring('FormatException: '.length)
+        : message;
   }
 
   @override
@@ -195,7 +232,7 @@ class _PersonalLinksScreenState extends State<PersonalLinksScreen> {
           title: const Text('My Links'),
           actions: [
             IconButton(
-              tooltip: 'Add video link',
+              tooltip: 'Add video or webpage link',
               onPressed: _addLink,
               icon: const Icon(Icons.add_link, color: _linksMint),
             ),
@@ -222,11 +259,12 @@ class _PersonalLinksScreenState extends State<PersonalLinksScreen> {
                           Text(
                             'Your personal video links',
                             textAlign: TextAlign.center,
-                            style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                            style: TextStyle(
+                                fontSize: 20, fontWeight: FontWeight.bold),
                           ),
                           SizedBox(height: 8),
                           Text(
-                            'Add a title and a direct video URL. Your links stay saved on this device.',
+                            'Add a direct video URL or a webpage that publicly exposes a compatible video source. Your links stay saved on this device.',
                             textAlign: TextAlign.center,
                             style: TextStyle(color: _linksMuted),
                           ),
@@ -264,11 +302,12 @@ class _PersonalLinksScreenState extends State<PersonalLinksScreen> {
                             '${link['type'] ?? 'Video'} • ${Uri.tryParse(link['url'] ?? '')?.host ?? ''}',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(color: _linksMuted, fontSize: 11),
+                            style: const TextStyle(
+                                color: _linksMuted, fontSize: 11),
                           ),
                           trailing: PopupMenuButton<String>(
                             onSelected: (value) {
-                              if (value == 'play') _play(link['url']!);
+                              if (value == 'play') _play(link);
                               if (value == 'download') _download(link);
                               if (value == 'delete') _deleteLink(index);
                             },
@@ -278,12 +317,16 @@ class _PersonalLinksScreenState extends State<PersonalLinksScreen> {
                                 child: ListTile(
                                   dense: true,
                                   leading: Icon(Icons.play_arrow),
-                                  title: Text('Play'),
+                                  title: Text('Find & Play'),
                                 ),
                               ),
                               PopupMenuItem(
                                 value: 'download',
-                                child: ListTile(dense: true,leading: Icon(Icons.download),title: Text('Download')),
+                                child: ListTile(
+                                  dense: true,
+                                  leading: Icon(Icons.download),
+                                  title: Text('Find & Download'),
+                                ),
                               ),
                               PopupMenuItem(
                                 value: 'delete',
@@ -295,7 +338,7 @@ class _PersonalLinksScreenState extends State<PersonalLinksScreen> {
                               ),
                             ],
                           ),
-                          onTap: () => _play(link['url']!),
+                          onTap: () => _play(link),
                         ),
                       );
                     },
