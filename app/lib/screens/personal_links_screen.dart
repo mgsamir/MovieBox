@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'player_screen.dart';
+import '../services/download_service.dart';
 
 const _linksBg = Color(0xFF101114);
 const _linksPanel = Color(0xFF1D1F23);
@@ -168,6 +169,17 @@ class _PersonalLinksScreenState extends State<PersonalLinksScreen> {
     );
   }
 
+  Future<void> _download(Map<String,String> link) async {
+    try {
+      await DownloadService.instance.download(title: link['title'] ?? 'Video', url: link['url']!);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Download started: ${link['title']}')));
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not download: $error')));
+    }
+  }
+
   void _play(String url) {
     Navigator.push(
       context,
@@ -257,6 +269,7 @@ class _PersonalLinksScreenState extends State<PersonalLinksScreen> {
                           trailing: PopupMenuButton<String>(
                             onSelected: (value) {
                               if (value == 'play') _play(link['url']!);
+                              if (value == 'download') _download(link);
                               if (value == 'delete') _deleteLink(index);
                             },
                             itemBuilder: (_) => const [
@@ -267,6 +280,10 @@ class _PersonalLinksScreenState extends State<PersonalLinksScreen> {
                                   leading: Icon(Icons.play_arrow),
                                   title: Text('Play'),
                                 ),
+                              ),
+                              PopupMenuItem(
+                                value: 'download',
+                                child: ListTile(dense: true,leading: Icon(Icons.download),title: Text('Download')),
                               ),
                               PopupMenuItem(
                                 value: 'delete',
