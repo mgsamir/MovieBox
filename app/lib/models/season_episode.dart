@@ -12,7 +12,7 @@ class SeasonItem {
         number = int.tryParse(map['season_number']?.toString() ?? '') ?? 0,
         title = (map['title']?.toString().trim().isNotEmpty ?? false)
             ? map['title'].toString().trim()
-            : 'Season \${map['season_number'] ?? ''}',
+            : 'Season ${map['season_number'] ?? ''}',
         synopsis = _optionalText(map['synopsis']),
         posterUrl = _optionalText(map['poster_url']);
 }
@@ -34,7 +34,7 @@ class EpisodeItem {
         number = int.tryParse(map['episode_number']?.toString() ?? '') ?? 0,
         title = map['title']?.toString().trim().isNotEmpty == true
             ? map['title'].toString().trim()
-            : 'Episode \${map['episode_number'] ?? ''}',
+            : 'Episode ${map['episode_number'] ?? ''}',
         synopsis = _optionalText(map['synopsis']),
         videoUrl = map['video_url']?.toString() ?? '',
         audioLanguage = map['audio_language']?.toString() ?? 'Hindi Dubbed',
