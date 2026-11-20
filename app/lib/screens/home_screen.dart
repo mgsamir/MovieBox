@@ -121,7 +121,11 @@ class _HomeScreenState extends State<HomeScreen> {
           const SizedBox(width: 9),
           const Text('Movie Box', style: TextStyle(fontSize: 19, fontWeight: FontWeight.w900, letterSpacing: 1.2)),
           const Spacer(),
-          IconButton(onPressed: _addSource, icon: const Icon(Icons.add_link, color: _accent)),
+          FilledButton.icon(
+            onPressed: _addSource,
+            icon: const Icon(Icons.add_link, size: 18),
+            label: const Text('Add Link'),
+          ),
         ]),
       )),
       SliverToBoxAdapter(child: Padding(
