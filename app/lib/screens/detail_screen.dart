@@ -115,7 +115,7 @@ class _DetailScreenState extends State<DetailScreen> {
     final metadata = <String>[
       if (item.year != null) item.year.toString(),
       if (item.type.isNotEmpty) item.type[0].toUpperCase() + item.type.substring(1),
-      if (item.rating != null) '★ \${item.rating!.toStringAsFixed(1)}',
+      if (item.rating != null) '★ ${item.rating!.toStringAsFixed(1)}',
     ];
 
     return Scaffold(
@@ -242,7 +242,7 @@ class _DetailScreenState extends State<DetailScreen> {
   Widget _episodeTile(EpisodeItem episode) {
     final duration = episode.durationSeconds == null
         ? ''
-        : ' • \${(episode.durationSeconds! ~/ 60)} min';
+        : ' • ${(episode.durationSeconds! ~/ 60)} min';
     return Container(
       margin: const EdgeInsets.only(bottom: 9),
       decoration: BoxDecoration(
