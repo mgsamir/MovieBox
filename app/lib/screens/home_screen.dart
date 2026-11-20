@@ -119,7 +119,7 @@ class _HomeScreenState extends State<HomeScreen> {
         child: Row(children: [
           const Icon(Icons.movie_creation_rounded, color: _accent, size: 30),
           const SizedBox(width: 9),
-          const Text('MOVIE BOX', style: TextStyle(fontSize: 19, fontWeight: FontWeight.w900, letterSpacing: 1.2)),
+          const Text('Movie Box', style: TextStyle(fontSize: 19, fontWeight: FontWeight.w900, letterSpacing: 1.2)),
           const Spacer(),
           IconButton(onPressed: _addSource, icon: const Icon(Icons.add_link, color: _accent)),
         ]),
