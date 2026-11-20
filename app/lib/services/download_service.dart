@@ -55,8 +55,7 @@ class DownloadService extends ChangeNotifier {
     await load();
     final uri=Uri.tryParse(url);
     if(uri==null||uri.scheme!='https'||uri.host.isEmpty)throw ArgumentError('A valid HTTPS direct video URL is required.');
-    final existing=_tasks.where((e)=>e.url==url&&e.isComplete).firstOrNull;
-    if(existing!=null)return;
+    if(_tasks.any((e)=>e.url==url&&e.isComplete))return;
     final id=DateTime.now().microsecondsSinceEpoch.toString();
     final dir=await getApplicationSupportDirectory();
     final safe=title.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'),'_');
