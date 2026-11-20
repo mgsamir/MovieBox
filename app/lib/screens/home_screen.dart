@@ -5,6 +5,7 @@ import '../models/content_item.dart';
 import '../services/catalog_service.dart';
 import 'detail_screen.dart';
 import 'personal_links_screen.dart';
+import 'downloads_screen.dart';
 
 const bg = Color(0xFF101114), panel = Color(0xFF1D1F23), muted = Color(0xFF9A9DA5), mint = Color(0xFF22D6A0), blue = Color(0xFF21B7F3);
 
@@ -117,7 +118,7 @@ class _HomeScreenState extends State<HomeScreen> {
     const SizedBox(height:10),SizedBox(height:44,child:ListView(scrollDirection:Axis.horizontal,padding:const EdgeInsets.symmetric(horizontal:12),children:[chip('All','all'),chip('Movies','movie'),chip('Series','series'),chip('Anime','anime')])),
     Expanded(child:loading?const Center(child:CircularProgressIndicator(color:mint)):error!=null?message(error!,true):GridView.builder(padding:const EdgeInsets.all(16),itemCount:results.length,gridDelegate:const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount:3,childAspectRatio:.57,crossAxisSpacing:10,mainAxisSpacing:14),itemBuilder:(_,i)=>poster(results[i])))
   ]);
-  Widget downloads()=>empty(Icons.download_for_offline_outlined,'Downloads','Your offline videos will appear here once downloaded.');
+  Widget downloads()=>const DownloadsScreen();
   Widget me()=>ListView(padding:const EdgeInsets.fromLTRB(18,18,18,28),children:[
     const Text('Me',style:TextStyle(fontSize:26,fontWeight:FontWeight.w900)),const SizedBox(height:18),
     Container(padding:const EdgeInsets.all(18),decoration:BoxDecoration(color:panel,borderRadius:BorderRadius.circular(18)),child:const Row(children:[
