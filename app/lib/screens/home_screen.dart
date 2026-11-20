@@ -121,20 +121,27 @@ class _HomeScreenState extends State<HomeScreen> {
           const SizedBox(width: 9),
           const Text('Movie Box', style: TextStyle(fontSize: 19, fontWeight: FontWeight.w900, letterSpacing: 1.2)),
           const Spacer(),
-          FilledButton.icon(
-            onPressed: _addSource,
-            icon: const Icon(Icons.add_link, size: 18),
-            label: const Text('Add Link'),
-          ),
         ]),
       )),
       SliverToBoxAdapter(child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        child: TextField(
-          onChanged: (v) => setState(() => _query = v),
-          style: const TextStyle(color: Colors.white),
-          decoration: InputDecoration(hintText: 'Search movies, series, anime...', prefixIcon: const Icon(Icons.search), filled: true, fillColor: _panel, contentPadding: const EdgeInsets.symmetric(vertical: 2), border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none)),
-        ),
+        child: Row(children: [
+          Expanded(child: TextField(
+            onChanged: (v) => setState(() => _query = v),
+            style: const TextStyle(color: Colors.white),
+            decoration: InputDecoration(hintText: 'Search movies, series, anime...', prefixIcon: const Icon(Icons.search), filled: true, fillColor: _panel, contentPadding: const EdgeInsets.symmetric(vertical: 2), border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none)),
+          )),
+          const SizedBox(width: 10),
+          SizedBox(
+            height: 52,
+            width: 52,
+            child: FilledButton(
+              onPressed: _addSource,
+              style: FilledButton.styleFrom(padding: EdgeInsets.zero, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
+              child: const Icon(Icons.add_link, size: 25),
+            ),
+          ),
+        ]),
       )),
       SliverToBoxAdapter(child: Padding(
         padding: const EdgeInsets.all(16),
