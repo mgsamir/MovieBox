@@ -1,0 +1,287 @@
+import 'dart:convert';
+
+import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import 'player_screen.dart';
+
+const _linksBg = Color(0xFF101114);
+const _linksPanel = Color(0xFF1D1F23);
+const _linksMint = Color(0xFF22D6A0);
+const _linksMuted = Color(0xFF9A9DA5);
+
+class PersonalLinksScreen extends StatefulWidget {
+  const PersonalLinksScreen({super.key});
+
+  @override
+  State<PersonalLinksScreen> createState() => _PersonalLinksScreenState();
+}
+
+class _PersonalLinksScreenState extends State<PersonalLinksScreen> {
+  static const _storageKey = 'moviebox.personal_video_links';
+  List<Map<String, String>> _links = [];
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadLinks();
+  }
+
+  Future<void> _loadLinks() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_storageKey);
+    final decoded = raw == null ? <dynamic>[] : jsonDecode(raw) as List<dynamic>;
+    if (!mounted) return;
+    setState(() {
+      _links = decoded
+          .whereType<Map>()
+          .map((entry) => entry.map(
+                (key, value) => MapEntry(key.toString(), value.toString()),
+              ))
+          .where((entry) => entry['title']?.isNotEmpty == true &&
+              entry['url']?.isNotEmpty == true)
+          .toList();
+      _loading = false;
+    });
+  }
+
+  Future<void> _saveLinks() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_storageKey, jsonEncode(_links));
+  }
+
+  Future<void> _addLink() async {
+    final titleController = TextEditingController();
+    final urlController = TextEditingController();
+    String type = 'Movie';
+    final formKey = GlobalKey<FormState>();
+
+    final result = await showDialog<Map<String, String>>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, refreshDialog) => AlertDialog(
+          backgroundColor: _linksPanel,
+          title: const Text('Add your video link'),
+          content: Form(
+            key: formKey,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextFormField(
+                    controller: titleController,
+                    autofocus: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Title',
+                      hintText: 'e.g. My saved movie',
+                    ),
+                    validator: (value) => value == null || value.trim().isEmpty
+                        ? 'Enter a title'
+                        : null,
+                  ),
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: urlController,
+                    keyboardType: TextInputType.url,
+                    decoration: const InputDecoration(
+                      labelText: 'Direct video URL',
+                      hintText: 'https://example.com/video.mp4',
+                    ),
+                    validator: (value) {
+                      final uri = Uri.tryParse(value?.trim() ?? '');
+                      if (uri == null ||
+                          uri.scheme != 'https' ||
+                          uri.host.isEmpty) {
+                        return 'Enter a valid HTTPS video URL';
+                      }
+                      return null;
+                    },
+                  ),
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<String>(
+                    value: type,
+                    decoration: const InputDecoration(labelText: 'Category'),
+                    items: const [
+                      DropdownMenuItem(value: 'Movie', child: Text('Movie')),
+                      DropdownMenuItem(value: 'Web Series', child: Text('Web Series')),
+                      DropdownMenuItem(value: 'Anime', child: Text('Anime')),
+                      DropdownMenuItem(value: 'Other', child: Text('Other')),
+                    ],
+                    onChanged: (value) =>
+                        refreshDialog(() => type = value ?? 'Movie'),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Use a direct video stream URL that you own or are authorized to watch. Ordinary webpage links are not playable here.',
+                    style: TextStyle(color: _linksMuted, fontSize: 12),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () {
+                if (!formKey.currentState!.validate()) return;
+                Navigator.pop(dialogContext, {
+                  'title': titleController.text.trim(),
+                  'url': urlController.text.trim(),
+                  'type': type,
+                });
+              },
+              child: const Text('Save link'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    titleController.dispose();
+    urlController.dispose();
+
+    if (result == null) return;
+    setState(() => _links.insert(0, result));
+    await _saveLinks();
+  }
+
+  Future<void> _deleteLink(int index) async {
+    final removed = _links.removeAt(index);
+    setState(() {});
+    await _saveLinks();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('${removed['title']} removed from My Links'),
+        action: SnackBarAction(
+          label: 'Undo',
+          onPressed: () async {
+            setState(() => _links.insert(index.clamp(0, _links.length), removed));
+            await _saveLinks();
+          },
+        ),
+      ),
+    );
+  }
+
+  void _play(String url) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => PlayerScreen(url: url)),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+        backgroundColor: _linksBg,
+        appBar: AppBar(
+          backgroundColor: _linksBg,
+          title: const Text('My Links'),
+          actions: [
+            IconButton(
+              tooltip: 'Add video link',
+              onPressed: _addLink,
+              icon: const Icon(Icons.add_link, color: _linksMint),
+            ),
+          ],
+        ),
+        floatingActionButton: FloatingActionButton.extended(
+          onPressed: _addLink,
+          backgroundColor: _linksMint,
+          foregroundColor: Colors.black,
+          icon: const Icon(Icons.add_link),
+          label: const Text('Add link'),
+        ),
+        body: _loading
+            ? const Center(child: CircularProgressIndicator(color: _linksMint))
+            : _links.isEmpty
+                ? Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(32),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: const [
+                          Icon(Icons.link, color: _linksMint, size: 54),
+                          SizedBox(height: 14),
+                          Text(
+                            'Your personal video links',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                          ),
+                          SizedBox(height: 8),
+                          Text(
+                            'Add a title and a direct video URL. Your links stay saved on this device.',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(color: _linksMuted),
+                          ),
+                        ],
+                      ),
+                    ),
+                  )
+                : ListView.separated(
+                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
+                    itemCount: _links.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 10),
+                    itemBuilder: (context, index) {
+                      final link = _links[index];
+                      return Container(
+                        decoration: BoxDecoration(
+                          color: _linksPanel,
+                          borderRadius: BorderRadius.circular(15),
+                        ),
+                        child: ListTile(
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 7,
+                          ),
+                          leading: const CircleAvatar(
+                            backgroundColor: Color(0xFF263A36),
+                            child: Icon(Icons.play_arrow, color: _linksMint),
+                          ),
+                          title: Text(
+                            link['title'] ?? 'Untitled',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                          subtitle: Text(
+                            '${link['type'] ?? 'Video'} • ${Uri.tryParse(link['url'] ?? '')?.host ?? ''}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(color: _linksMuted, fontSize: 11),
+                          ),
+                          trailing: PopupMenuButton<String>(
+                            onSelected: (value) {
+                              if (value == 'play') _play(link['url']!);
+                              if (value == 'delete') _deleteLink(index);
+                            },
+                            itemBuilder: (_) => const [
+                              PopupMenuItem(
+                                value: 'play',
+                                child: ListTile(
+                                  dense: true,
+                                  leading: Icon(Icons.play_arrow),
+                                  title: Text('Play'),
+                                ),
+                              ),
+                              PopupMenuItem(
+                                value: 'delete',
+                                child: ListTile(
+                                  dense: true,
+                                  leading: Icon(Icons.delete_outline),
+                                  title: Text('Delete'),
+                                ),
+                              ),
+                            ],
+                          ),
+                          onTap: () => _play(link['url']!),
+                        ),
+                      );
+                    },
+                  ),
+      );
+}
