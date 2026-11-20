@@ -11,7 +11,7 @@ class MovieBoxApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => MaterialApp(
-    title: 'MOVIE BOX',
+    title: 'Movie Box',
     debugShowCheckedModeBanner: false,
     theme: ThemeData(
       brightness: Brightness.dark,
