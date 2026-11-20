@@ -13,11 +13,14 @@ class ResolvedVideoSource {
       uri.path.toLowerCase().endsWith('.m3u8') ||
       contentType.toLowerCase().contains('mpegurl');
 
-  bool get canDownload =>
-      !isHls &&
-      (contentType.toLowerCase().startsWith('video/') ||
-          RegExp(r'\\.(mp4|m4v|mov|webm)$', caseSensitive: false)
-              .hasMatch(uri.path));
+  bool get canDownload {
+    final segment = uri.pathSegments.isEmpty ? '' : uri.pathSegments.last;
+    final dot = segment.lastIndexOf('.');
+    final extension = dot < 0 ? '' : segment.substring(dot + 1).toLowerCase();
+    return !isHls &&
+        (contentType.toLowerCase().startsWith('video/') ||
+            const {'mp4', 'm4v', 'mov', 'webm'}.contains(extension));
+  }
 }
 
 class VideoLinkResolver {
