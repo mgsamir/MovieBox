@@ -4,6 +4,7 @@ import '../config.dart';
 import '../models/content_item.dart';
 import '../services/catalog_service.dart';
 import 'detail_screen.dart';
+import 'personal_links_screen.dart';
 
 const bg = Color(0xFF101114), panel = Color(0xFF1D1F23), muted = Color(0xFF9A9DA5), mint = Color(0xFF22D6A0), blue = Color(0xFF21B7F3);
 
@@ -126,7 +127,7 @@ class _HomeScreenState extends State<HomeScreen> {
     const SizedBox(height:18),
     menu(Icons.history,'Watch History','${history.length} titles',()=>collection('Watch History',history.keys.toSet())),
     menu(Icons.bookmark_border,'My List','${saved.length}',()=>collection('My List',saved)),
-    menu(Icons.tv,'Web Link','Website browsing removed',()=>info('Web Link','Website browsing is not part of MovieBox.')),
+    menu(Icons.link,'My Links','Add and manage your own video links',()=>Navigator.push(context,MaterialPageRoute(builder:(_)=>const PersonalLinksScreen()))),
     const SizedBox(height:14),menu(Icons.settings_outlined,'Settings','App preferences and playback options',settings),
     menu(Icons.info_outline,'About MovieBox','Version 0.1.0',()=>info('About MovieBox','MovieBox for Android — movies, series and anime.'))
   ]);
