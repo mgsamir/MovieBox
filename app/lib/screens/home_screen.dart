@@ -19,7 +19,7 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  final _catalogService = CatalogService();
+  CatalogService? _catalogService;
   int _tab = 0;
   String _query = '';
   String _selectedType = 'all';
@@ -53,7 +53,7 @@ class _HomeScreenState extends State<HomeScreen> {
     });
 
     try {
-      final items = await _catalogService.loadAll(limit: 150);
+      final items = await (_catalogService ??= CatalogService()).loadAll(limit: 150);
       if (!mounted) return;
       setState(() {
         _catalog = items;
