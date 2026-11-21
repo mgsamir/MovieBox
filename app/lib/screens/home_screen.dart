@@ -43,10 +43,24 @@ class _HomeScreenState extends State<HomeScreen> {
     await persistCollections();
   }
   Future<void> load() async {
-    if (!AppConfig.hasSupabaseConfig) { setState(() { loading=false; error='Catalog connection is not configured. Add Supabase build secrets.'; }); return; }
     setState(() { loading=true; error=null; });
-    try { final data=await (service ??= CatalogService()).loadAll(limit:150); if (!mounted) return; setState(() { catalog=data; loading=false; }); }
-    catch (_) { if (!mounted) return; setState(() { loading=false; error='Could not load catalog. Check your connection and try again.'; }); }
+    try {
+      final data = await (service ??= CatalogService()).loadAll(limit:150);
+      if (!mounted) return;
+      setState(() {
+        catalog = data;
+        loading = false;
+        error = data.isEmpty
+            ? 'Catalog is empty or unavailable. Pull down to retry when internet is connected.'
+            : null;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        loading = false;
+        error = 'Could not load catalogue. Check internet and pull down to retry.';
+      });
+    }
   }
   List<ContentItem> get results => catalog.where((e) => (type=='all' || e.type.toLowerCase()==type) && (query.isEmpty || e.title.toLowerCase().contains(query.toLowerCase()))).toList();
   @override Widget build(BuildContext context) => Scaffold(
