@@ -243,13 +243,6 @@ class _PersonalLinksScreenState extends State<PersonalLinksScreen> {
             ),
           ],
         ),
-        floatingActionButton: FloatingActionButton.extended(
-          onPressed: _addLink,
-          backgroundColor: _linksMint,
-          foregroundColor: Colors.black,
-          icon: const Icon(Icons.add_link),
-          label: const Text('Add link'),
-        ),
         body: _loading
             ? const Center(child: CircularProgressIndicator(color: _linksMint))
             : _links.isEmpty
