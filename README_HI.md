@@ -46,3 +46,8 @@ base64 -w 0 moviebox-upload.jks
 ```
 
 Put the second command's complete output in `ANDROID_KEYSTORE_BASE64`, and use the passwords and alias chosen in the first command for the other secrets. Once configured, all future APKs use this same key and can update the installed app in place. The first switch from an older CI debug-signed APK to this stable key requires one uninstall/reinstall; after that, updates install over the app normally. If signing secrets are absent, CI deliberately warns that the temporary debug-signed APK is not suitable for seamless updates.
+
+
+## Own website sync (on device)
+
+Add a GitHub Actions secret named `SITE_URL` (your website's https address). The build passes it to the app, which then syncs your website's titles by itself: when the app opens, when it returns to the foreground, and on pull-to-refresh (every 3 hours at most). The address is never shown in the app. The app detects a WordPress API, sitemap, RSS feed or poster page automatically. Title detail pages have Watch and Download buttons; if no direct video is found, the in-app browser finder opens.

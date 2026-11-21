@@ -3,6 +3,10 @@ import 'package:flutter/material.dart';
 import '../models/content_item.dart';
 import '../models/season_episode.dart';
 import '../services/catalog_service.dart';
+import '../services/download_service.dart';
+import '../services/site_sync_service.dart';
+import '../services/video_link_resolver.dart';
+import 'browser_video_finder_screen.dart';
 import 'player_screen.dart';
 
 class DetailScreen extends StatefulWidget {
@@ -30,7 +34,11 @@ class _DetailScreenState extends State<DetailScreen> {
   bool _loadingEpisodes = false;
   String? _seasonError;
 
+  bool _busy = false;
+  bool get _isSite => widget.item.source == siteSourceName;
+
   bool get _isEpisodic {
+    if (_isSite) return false;
     final type = widget.item.type.toLowerCase();
     return type == 'series' || type == 'anime' || type == 'web_series';
   }
@@ -109,6 +117,75 @@ class _DetailScreenState extends State<DetailScreen> {
     );
   }
 
+  void _snack(String text, {SnackBarAction? action}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(text), action: action));
+  }
+
+  Future<ResolvedVideoSource?> _resolveSite() async {
+    final item = widget.item;
+    final candidates = <String>[
+      if (item.videoUrl != null && item.videoUrl!.startsWith('https://')) item.videoUrl!,
+      if (item.sourceUrl != null) item.sourceUrl!,
+    ];
+    for (final url in candidates) {
+      try {
+        return await VideoLinkResolver.resolve(url);
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  void _openBrowserFinder() {
+    final url = widget.item.sourceUrl;
+    if (url == null) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => BrowserVideoFinderScreen(pageUrl: url, title: widget.item.title),
+      ),
+    );
+  }
+
+  Future<void> _siteAction({required bool download}) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    _snack('Finding the video...');
+    final source = await _resolveSite();
+    if (!mounted) return;
+    setState(() => _busy = false);
+    if (source == null) {
+      _snack(
+        'Video link was not found automatically.',
+        action: SnackBarAction(label: 'Open browser', onPressed: _openBrowserFinder),
+      );
+      return;
+    }
+    if (!download) {
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => PlayerScreen(url: source.uri.toString())),
+      );
+      return;
+    }
+    if (!source.canDownload) {
+      _snack('This video is a stream (HLS), so offline download is not supported yet. You can still watch it.');
+      return;
+    }
+    try {
+      await DownloadService.instance.download(
+        title: widget.item.title,
+        url: source.uri.toString(),
+      );
+      _snack('Download started. Check the Downloads tab.');
+    } catch (_) {
+      _snack('Could not start the download.');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final item = widget.item;
@@ -158,6 +235,7 @@ class _DetailScreenState extends State<DetailScreen> {
           ),
           if (metadata.isNotEmpty)
             Text(metadata.join('  •  '), style: const TextStyle(color: Colors.white60)),
+          if (!_isSite || item.language != null) ...[
           const SizedBox(height: 9),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
@@ -181,6 +259,7 @@ class _DetailScreenState extends State<DetailScreen> {
               ),
             ),
           ),
+          ],
           if (item.synopsis != null) ...[
             const SizedBox(height: 16),
             Text(item.synopsis!),
@@ -228,6 +307,35 @@ class _DetailScreenState extends State<DetailScreen> {
               else
                 ..._episodes.map(_episodeTile),
             ],
+          ] else if (_isSite) ...[
+            const SizedBox(height: 20),
+            Row(children: [
+              Expanded(
+                child: FilledButton.icon(
+                  onPressed: _busy ? null : () => _siteAction(download: false),
+                  icon: const Icon(Icons.play_arrow),
+                  label: const Text('Watch'),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFF22D6A0),
+                    foregroundColor: Colors.black,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: _busy ? null : () => _siteAction(download: true),
+                  icon: const Icon(Icons.download),
+                  label: const Text('Download'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: const Color(0xFF22D6A0),
+                    side: const BorderSide(color: Color(0xFF22D6A0)),
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
+                ),
+              ),
+            ]),
           ] else if (item.videoUrl != null && item.videoUrl!.startsWith('https://')) ...[
             const SizedBox(height: 20),
             FilledButton.icon(

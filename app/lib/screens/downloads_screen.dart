@@ -15,7 +15,7 @@ class _DownloadsScreenState extends State<DownloadsScreen>{
  @override Widget build(BuildContext context)=>AnimatedBuilder(animation:service,builder:(context,_){
   final tasks=service.tasks;
   return Scaffold(backgroundColor:_bg,appBar:AppBar(backgroundColor:_bg,title:const Text('Downloads'),actions:[IconButton(onPressed:()=>service.load(),icon:const Icon(Icons.refresh))]),
-   body:tasks.isEmpty?const Center(child:Column(mainAxisSize:MainAxisSize.min,children:[Icon(Icons.download_for_offline_outlined,color:_mint,size:54),SizedBox(height:14),Text('No downloads yet',style:TextStyle(fontSize:20,fontWeight:FontWeight.bold)),SizedBox(height:7),Text('Add a direct video link in My Links and tap Download.',style:TextStyle(color:_muted),textAlign:TextAlign.center)]))
+   body:tasks.isEmpty?const Center(child:Column(mainAxisSize:MainAxisSize.min,children:[Icon(Icons.download_for_offline_outlined,color:_mint,size:54),SizedBox(height:14),Text('No downloads yet',style:TextStyle(fontSize:20,fontWeight:FontWeight.bold)),SizedBox(height:7),Text('Open any title and tap Download, or add a link in My Links.',style:TextStyle(color:_muted),textAlign:TextAlign.center)]))
    :ListView.separated(padding:const EdgeInsets.all(16),itemCount:tasks.length,separatorBuilder:(_,__)=>const SizedBox(height:10),itemBuilder:(context,index){
     final t=tasks[index];final file=File(t.path);
     return Container(padding:const EdgeInsets.all(14),decoration:BoxDecoration(color:_panel,borderRadius:BorderRadius.circular(15)),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[

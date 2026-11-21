@@ -3,6 +3,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../config.dart';
 import '../models/content_item.dart';
 import '../services/catalog_service.dart';
+import '../services/site_sync_service.dart';
 import 'detail_screen.dart';
 import 'personal_links_screen.dart';
 import 'downloads_screen.dart';
@@ -16,19 +17,69 @@ class HomeScreen extends StatefulWidget {
   @override State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   CatalogService? service;
   int tab = 0;
   String watchMode = 'streaming';
   bool loading = true;
   String? error;
   List<ContentItem> catalog = [];
+  List<ContentItem> siteItems = [];
+  bool syncing = false;
   final catalogNotifier = ValueNotifier<List<ContentItem>>([]);
   final Set<String> saved = {};
   final Map<String, double> history = {};
 
-  @override void initState() { super.initState(); restoreLocalData(); load(); }
-  @override void dispose() { catalogNotifier.dispose(); super.dispose(); }
+  List<ContentItem> get all => [...siteItems, ...catalog];
+
+  @override void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    restoreLocalData();
+    load();
+    loadSite();
+  }
+  @override void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    catalogNotifier.dispose();
+    super.dispose();
+  }
+  @override void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) autoSyncIfDue();
+  }
+
+  // ---------------- Website sync ----------------
+  Future<void> loadSite() async {
+    final cached = await SiteSyncService.instance.cachedItems();
+    if (!mounted) return;
+    setState(() => siteItems = cached);
+    catalogNotifier.value = all;
+    await autoSyncIfDue();
+  }
+  Future<void> autoSyncIfDue() async {
+    if (syncing || !await SiteSyncService.instance.shouldAutoSync()) return;
+    await runSync();
+  }
+  Future<void> runSync({bool manual = false}) async {
+    if (syncing || SiteSyncService.instance.isRunning) return;
+    if ((await SiteSyncService.instance.savedUrl()) == null) return;
+    setState(() => syncing = true);
+    final result = await SiteSyncService.instance.sync();
+    final cached = await SiteSyncService.instance.cachedItems();
+    if (!mounted) return;
+    setState(() { syncing = false; siteItems = cached; });
+    catalogNotifier.value = all;
+    final text = result.error != null
+        ? 'Website sync failed: ${result.error}'
+        : result.added > 0
+            ? '${result.added} new titles added'
+            : manual ? 'Already up to date (${result.total} titles)' : null;
+    if (text != null) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(text)));
+    }
+  }
 
   Future<void> restoreLocalData() async {
     final prefs = await SharedPreferences.getInstance();
@@ -53,7 +104,6 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       final data = await (service ??= CatalogService()).loadAll(limit: 150);
       if (!mounted) return;
-      catalogNotifier.value = data;
       setState(() {
         catalog = data;
         loading = false;
@@ -61,6 +111,7 @@ class _HomeScreenState extends State<HomeScreen> {
             ? 'Catalog is empty or unavailable. Pull down to retry when internet is connected.'
             : null;
       });
+      catalogNotifier.value = all;
     } catch (_) {
       if (!mounted) return;
       setState(() {
@@ -99,17 +150,19 @@ class _HomeScreenState extends State<HomeScreen> {
     icon: Icon(a, color: Colors.white70), selectedIcon: Icon(b, color: mint), label: label);
 
   // ---------------- Home ----------------
-  Widget home() => RefreshIndicator(onRefresh: load, child: CustomScrollView(slivers: [
+  Widget home() => RefreshIndicator(onRefresh: () async { runSync(manual: true); await load(); }, child: CustomScrollView(slivers: [
     SliverToBoxAdapter(child: topBar()),
-    if (history.isNotEmpty) SliverToBoxAdapter(child: section('Continue Watching', catalog.where((e) => history.containsKey(e.id)).toList())),
-    if (!loading && error == null) ...[
+    if (syncing) SliverToBoxAdapter(child: syncBar()),
+    if (history.isNotEmpty) SliverToBoxAdapter(child: section('Continue Watching', all.where((e) => history.containsKey(e.id)).toList())),
+    if (siteItems.isNotEmpty) SliverToBoxAdapter(child: section('My Website', siteItems)),
+    if (!loading && catalog.isNotEmpty) ...[
       SliverToBoxAdapter(child: section('Trending Now', catalog)),
       SliverToBoxAdapter(child: section('Movies', catalog.where((e) => e.type.toLowerCase() == 'movie').toList())),
       SliverToBoxAdapter(child: section('Web Series', catalog.where((e) => e.type.toLowerCase() == 'series').toList())),
       SliverToBoxAdapter(child: section('Anime', catalog.where((e) => e.type.toLowerCase() == 'anime').toList())),
     ],
-    if (loading) const SliverToBoxAdapter(child: Padding(padding: EdgeInsets.all(28), child: Center(child: CircularProgressIndicator(color: mint)))),
-    if (error != null) SliverToBoxAdapter(child: message(error!, true)),
+    if (loading && siteItems.isEmpty) const SliverToBoxAdapter(child: Padding(padding: EdgeInsets.all(28), child: Center(child: CircularProgressIndicator(color: mint)))),
+    if (error != null && all.isEmpty && !syncing) SliverToBoxAdapter(child: message(error!, true)),
     const SliverToBoxAdapter(child: SizedBox(height: 24)),
   ]));
 
@@ -132,7 +185,7 @@ class _HomeScreenState extends State<HomeScreen> {
           child: Row(children: [
             const Icon(Icons.search, color: Colors.white70, size: 24),
             const SizedBox(width: 10),
-            Expanded(child: Text(catalog.isNotEmpty ? catalog.first.title : _searchHint, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white70))),
+            Expanded(child: Text(all.isNotEmpty ? all.first.title : _searchHint, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white70))),
             const SizedBox(width: 8),
             const Text('Search', style: TextStyle(color: mint, fontWeight: FontWeight.bold)),
           ]),
@@ -141,16 +194,31 @@ class _HomeScreenState extends State<HomeScreen> {
     ]),
   );
 
+  Widget syncBar() => Padding(
+    padding: const EdgeInsets.fromLTRB(18, 4, 18, 8),
+    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      const LinearProgressIndicator(color: mint, backgroundColor: Colors.white12, minHeight: 3),
+      const SizedBox(height: 6),
+      ValueListenableBuilder<String?>(
+        valueListenable: SiteSyncService.instance.progress,
+        builder: (_, text, __) => Text(text ?? 'Syncing your website...', style: const TextStyle(color: muted, fontSize: 12)),
+      ),
+    ]),
+  );
+
   void openSearch() => Navigator.push(context, MaterialPageRoute(builder: (_) => SearchScreen(catalog: catalogNotifier, onOpen: open)));
 
   Widget section(String title, List<ContentItem> items) {
     if (items.isEmpty) return const SizedBox.shrink();
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Padding(padding: const EdgeInsets.fromLTRB(18, 12, 16, 10), child: Row(children: [
-        Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
-        const Spacer(),
-        const Icon(Icons.chevron_right, color: Colors.white54),
-      ])),
+      InkWell(
+        onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => CollectionPage(title: title, items: items, onOpen: open))),
+        child: Padding(padding: const EdgeInsets.fromLTRB(18, 12, 16, 10), child: Row(children: [
+          Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+          const Spacer(),
+          const Icon(Icons.chevron_right, color: Colors.white54),
+        ])),
+      ),
       SizedBox(height: 205, child: ListView.separated(
         padding: const EdgeInsets.symmetric(horizontal: 16),
         scrollDirection: Axis.horizontal,
@@ -163,7 +231,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   // ---------------- Me ----------------
   Widget me() {
-    final watched = catalog.where((e) => history.containsKey(e.id)).toList();
+    final watched = all.where((e) => history.containsKey(e.id)).toList();
     return ListView(padding: const EdgeInsets.fromLTRB(16, 20, 16, 28), children: [
       groupPanel([
         meRow(Icons.history, 'Watch History', '', () => collection('Watch History', history.keys.toSet())),
@@ -224,7 +292,7 @@ class _HomeScreenState extends State<HomeScreen> {
     await p.setString('moviebox.watch_mode', v);
   })));
   void collection(String title, Set<String> ids) {
-    final list = catalog.where((e) => ids.contains(e.id)).toList();
+    final list = all.where((e) => ids.contains(e.id)).toList();
     Navigator.push(context, MaterialPageRoute(builder: (_) => CollectionPage(title: title, items: list, onOpen: open)));
   }
   void open(ContentItem item) {
