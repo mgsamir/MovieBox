@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../services/download_service.dart';
 import '../services/video_link_resolver.dart';
 import 'player_screen.dart';
+import 'browser_video_finder_screen.dart';
 
 const _linksBg = Color(0xFF101114);
 const _linksPanel = Color(0xFF1D1F23);
@@ -201,6 +202,10 @@ class _PersonalLinksScreenState extends State<PersonalLinksScreen> {
     }
   }
 
+  Future<void> _openBrowserFinder(Map<String, String> link) async {
+    await Navigator.push(context, MaterialPageRoute(builder: (_) => BrowserVideoFinderScreen(pageUrl: link['url']!, title: link['title'] ?? 'Video Browser')));
+  }
+
   Future<void> _play(Map<String, String> link) async {
     _showMessage('Finding a playable video on this link...');
     try {
@@ -308,6 +313,7 @@ class _PersonalLinksScreenState extends State<PersonalLinksScreen> {
                           trailing: PopupMenuButton<String>(
                             onSelected: (value) {
                               if (value == 'play') _play(link);
+                              if (value == 'browser') _openBrowserFinder(link);
                               if (value == 'download') _download(link);
                               if (value == 'delete') _deleteLink(index);
                             },
@@ -319,6 +325,10 @@ class _PersonalLinksScreenState extends State<PersonalLinksScreen> {
                                   leading: Icon(Icons.play_arrow),
                                   title: Text('Find & Play'),
                                 ),
+                              ),
+                              PopupMenuItem(
+                                value: 'browser',
+                                child: ListTile(dense: true, leading: Icon(Icons.travel_explore), title: Text('Open Browser & Find Video')),
                               ),
                               PopupMenuItem(
                                 value: 'download',
