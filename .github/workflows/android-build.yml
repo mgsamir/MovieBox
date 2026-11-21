@@ -78,10 +78,18 @@ jobs:
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: |
           cd app
+          set -o pipefail
           flutter build apk --release \
             --build-number "$GITHUB_RUN_NUMBER" \
             --dart-define=SUPABASE_URL="$SUPABASE_URL" \
-            --dart-define=SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY"
+            --dart-define=SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY" 2>&1 | tee ../build.log
+      - name: Show build error summary
+        if: failure()
+        run: |
+          if [ -f build.log ]; then
+            MSG=$(grep -v '^$' build.log | tail -n 60 | tr -d '\r' | sed 's/%/%25/g' | awk 'BEGIN{ORS="%0A"}{print}')
+            echo "::error title=Build log tail::$MSG"
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: moviebox-android-apk
