@@ -162,13 +162,19 @@ class _DetailScreenState extends State<DetailScreen> {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
             decoration: BoxDecoration(
-              color: const Color(0xFF173D35),
+              color: (item.language?.toLowerCase().contains('hindi') ?? false)
+                  ? const Color(0xFF173D35)
+                  : const Color(0xFF353039),
               borderRadius: BorderRadius.circular(30),
             ),
-            child: const Text(
-              'HINDI DUBBED',
+            child: Text(
+              (item.language?.toLowerCase().contains('hindi') ?? false)
+                  ? 'HINDI DUBBED'
+                  : 'AUDIO NOT VERIFIED',
               style: TextStyle(
-                color: Color(0xFF62E8BD),
+                color: (item.language?.toLowerCase().contains('hindi') ?? false)
+                    ? const Color(0xFF62E8BD)
+                    : Colors.white70,
                 fontSize: 11,
                 fontWeight: FontWeight.w800,
                 letterSpacing: 1,
