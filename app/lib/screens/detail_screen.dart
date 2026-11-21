@@ -157,10 +157,8 @@ class _DetailScreenState extends State<DetailScreen> {
     if (!mounted) return;
     setState(() => _busy = false);
     if (source == null) {
-      _snack(
-        'Video link was not found automatically.',
-        action: SnackBarAction(label: 'Open browser', onPressed: _openBrowserFinder),
-      );
+      _snack('Opening the page. Play the video there and it will be detected.');
+      _openBrowserFinder();
       return;
     }
     if (!download) {

@@ -31,7 +31,9 @@ class VideoLinkResolver {
   };
   static final http.Client _client = http.Client();
 
-  static Future<ResolvedVideoSource> resolve(String rawUrl) async {
+  static Future<ResolvedVideoSource> resolve(String rawUrl) => _resolve(rawUrl, 0, null);
+
+  static Future<ResolvedVideoSource> _resolve(String rawUrl, int depth, Uri? referer) async {
     final pageUri = Uri.tryParse(rawUrl.trim());
     if (pageUri == null ||
         pageUri.scheme != 'https' ||
@@ -72,6 +74,7 @@ class VideoLinkResolver {
       headers: const {
         'User-Agent': 'Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 Chrome/130 Mobile Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8',
+        if (referer != null) 'Referer': referer.toString(),
       },
     ).timeout(const Duration(seconds: 20));
 
@@ -151,9 +154,51 @@ class VideoLinkResolver {
       }
     }
 
+    // Many players keep the file address inside inline scripts or JSON.
+    final inScript = _findMediaInText(response.body);
+    if (inScript != null) return inScript;
+
+    // One level of embedded players (iframes), opened like a normal browser would.
+    if (depth == 0) {
+      var tried = 0;
+      for (final frame in document.querySelectorAll('iframe[src], iframe[data-src]')) {
+        final src = (frame.attributes['src'] ?? frame.attributes['data-src'] ?? '').trim();
+        if (src.isEmpty || src.startsWith('about:') || src.startsWith('javascript:')) continue;
+        if (tried++ >= 3) break;
+        try {
+          return await _resolve(pageUri.resolve(src).toString(), 1, pageUri);
+        } catch (_) {
+          // Try the next embedded player.
+        }
+      }
+    }
+
     throw const FormatException(
       'No directly playable video was found on this page. The site may use an unsupported player, require sign-in, or protect its stream.',
     );
+  }
+
+  static ResolvedVideoSource? _findMediaInText(String text) {
+    final cleaned = text
+        .replaceAll(r'\/', '/')
+        .replaceAll(r'\u0026', '&')
+        .replaceAll('&amp;', '&');
+    final re = RegExp(
+        r'''https?://[^"'\s<>\\]+?\.(?:mp4|m3u8|webm|m4v)(?:\?[^"'\s<>\\]*)?''',
+        caseSensitive: false);
+    for (final m in re.allMatches(cleaned)) {
+      var url = m.group(0)!;
+      if (url.startsWith('http://')) url = 'https://${url.substring(7)}';
+      final uri = Uri.tryParse(url);
+      if (uri == null || uri.host.isEmpty || uri.userInfo.isNotEmpty) continue;
+      final ext = _extension(uri);
+      if (!_mediaExtensions.contains(ext)) continue;
+      return ResolvedVideoSource(
+        uri: uri,
+        contentType: ext == 'm3u8' ? 'application/vnd.apple.mpegurl' : 'video/$ext',
+      );
+    }
+    return null;
   }
 
   static String _extension(Uri uri) {

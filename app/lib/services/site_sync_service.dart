@@ -24,6 +24,13 @@ class SiteSyncResult {
   });
 }
 
+class _SmEntry {
+  final String url;
+  final String? image;
+  final DateTime? lastmod;
+  const _SmEntry(this.url, {this.image, this.lastmod});
+}
+
 class _Found {
   final String url;
   final String title;
@@ -57,6 +64,30 @@ class SiteSyncService {
   static const _pendingKey = 'moviebox.site_pending';
   static const _ua =
       'Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 Chrome/130 Mobile Safari/537.36';
+
+  static const _logKey = 'moviebox.site_log';
+
+  /// Increases whenever new titles were saved, so screens can refresh.
+  final ValueNotifier<int> revision = ValueNotifier<int>(0);
+  final List<String> _logLines = [];
+  String? _firstPageProblem;
+  void _log(String line) {
+    if (_logLines.length < 80) _logLines.add(line);
+  }
+
+  Future<List<String>> lastLog() async =>
+      (await SharedPreferences.getInstance()).getStringList(_logKey) ?? const <String>[];
+
+  Future<int> cachedCount() async => (await cachedItems()).length;
+
+  /// Forget everything that was saved from the website (used by Reset).
+  Future<void> clearCache() async {
+    final prefs = await SharedPreferences.getInstance();
+    for (final key in [_itemsKey, _skippedKey, _lastKey, _pendingKey, _activeKey, _logKey]) {
+      await prefs.remove(key);
+    }
+    revision.value++;
+  }
 
   /// Human readable progress while a sync is running (null when idle).
   final ValueNotifier<String?> progress = ValueNotifier<String?>(null);
@@ -137,6 +168,8 @@ class SiteSyncService {
       return const SiteSyncResult(total: 0, added: 0, pending: 0, method: 'busy');
     }
     _running = true;
+    _logLines.clear();
+    _firstPageProblem = null;
     final client = http.Client();
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -193,34 +226,65 @@ class SiteSyncService {
       var found = await _wordpress(client, base) ?? <_Found>[];
       if (found.isNotEmpty) method = 'WordPress';
 
-      // 2) XML sitemap: every page, read incrementally (new pages only).
+      // 2) XML sitemap: list every page at once, then read details newest-first.
       if (method.isEmpty) {
-        final urls = await _sitemapUrls(client, base);
-        if (urls.isNotEmpty) {
+        final entries = await _sitemapEntries(client, base);
+        if (entries.isNotEmpty) {
           method = 'Sitemap';
-          final fresh =
-              urls.where((u) => !items.containsKey(u) && !skipped.contains(u)).toList();
+          for (var i = 0; i < entries.length; i++) {
+            final e = entries[i];
+            if (items.containsKey(e.url) || skipped.contains(e.url)) continue;
+            final title = _titleFromUrl(e.url);
+            if (title.isEmpty) continue;
+            items[e.url] = <String, dynamic>{
+              'id': 'site-${_fnv(e.url)}',
+              'title': title,
+              'content_type': _guessType(title),
+              'poster_url': _https(e.image),
+              'language': RegExp('hindi', caseSensitive: false).hasMatch(title) ? 'Hindi' : null,
+              'source': siteSourceName,
+              'source_url': e.url,
+              'release_year': _guessYear(title),
+              'sort': (e.lastmod ?? now.subtract(Duration(seconds: i))).millisecondsSinceEpoch,
+            };
+            added++;
+          }
+          // Titles are visible immediately; details are filled in below.
+          await _persist(prefs, items, skipped);
+
+          final fresh = entries.where((e) {
+            final it = items[e.url];
+            return it != null && it['e'] != 1 && ((it['t'] as num?) ?? 0) < 3;
+          }).toList()
+            ..sort((a, b) => ((items[b.url]!['sort'] as num?) ?? 0)
+                .compareTo((items[a.url]!['sort'] as num?) ?? 0));
           final deadline = DateTime.now().add(const Duration(seconds: 150));
           var done = 0;
           var chunks = 0;
+          var ok = 0;
           for (var i = 0; i < fresh.length; i += 8) {
             if (DateTime.now().isAfter(deadline)) break;
             final chunk = fresh.skip(i).take(8).toList();
-            final results = await Future.wait(chunk.map((u) => _readPage(client, u, label)));
+            final results =
+                await Future.wait(chunk.map((e) => _readPage(client, e.url, label)));
             for (var j = 0; j < chunk.length; j++) {
+              final it = items[chunk[j].url]!;
               final r = results[j];
               if (r == null) {
-                skipped.add(chunk[j]);
-              } else if (add(r, done + j)) {
-                added++;
+                it['t'] = ((it['t'] as num?) ?? 0).toInt() + 1;
+              } else {
+                _enrich(it, r);
+                ok++;
               }
             }
             done += chunk.length;
             chunks++;
             progress.value = 'Reading titles... $done / ${fresh.length}';
-            if (chunks % 5 == 0) await _persist(prefs, items, skipped);
+            if (chunks % 3 == 0) await _persist(prefs, items, skipped);
           }
           pending = fresh.length - done;
+          _log('Page details read: $ok of $done');
+          if (_firstPageProblem != null) _log('First page problem: $_firstPageProblem');
         }
       }
 
@@ -254,10 +318,16 @@ class SiteSyncService {
           pending: pending,
           method: method.isEmpty ? 'Saved list' : method);
     } catch (e) {
+      final text = _friendly(e);
+      _log('Result: $text');
       return SiteSyncResult(
-          total: 0, added: 0, pending: 0, method: '', error: _friendly(e));
+          total: 0, added: 0, pending: 0, method: '', error: text);
     } finally {
       client.close();
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setStringList(_logKey, List<String>.from(_logLines));
+      } catch (_) {}
       _running = false;
       progress.value = null;
     }
@@ -268,7 +338,7 @@ class SiteSyncService {
     final origin = _origin(base);
     final probe = await _get(
         c, origin.replace(path: '/wp-json/wp/v2/posts', queryParameters: {'per_page': '1'}),
-        seconds: 12);
+        seconds: 12, tag: 'WordPress API');
     if (probe == null ||
         probe.statusCode != 200 ||
         !probe.body.trimLeft().startsWith('[')) {
@@ -366,10 +436,10 @@ class SiteSyncService {
             m['date_gmt']?.toString() ?? m['date']?.toString() ?? ''));
   }
 
-  Future<List<String>> _sitemapUrls(http.Client c, Uri base) async {
+  Future<List<_SmEntry>> _sitemapEntries(http.Client c, Uri base) async {
     final origin = _origin(base);
     final queue = <Uri>[];
-    final robots = await _get(c, origin.resolve('/robots.txt'), seconds: 8);
+    final robots = await _get(c, origin.resolve('/robots.txt'), seconds: 8, tag: 'robots.txt');
     if (robots != null && robots.statusCode == 200) {
       for (final line in const LineSplitter().convert(robots.body)) {
         if (line.toLowerCase().startsWith('sitemap:')) {
@@ -377,46 +447,126 @@ class SiteSyncService {
           if (u != null && u.hasScheme) queue.add(u);
         }
       }
+      _log('robots.txt lists ${queue.length} sitemap(s)');
     }
-    for (final p in const ['/sitemap.xml', '/sitemap_index.xml', '/wp-sitemap.xml']) {
+    for (final p in const [
+      '/sitemap.xml', '/sitemap_index.xml', '/sitemap-index.xml',
+      '/wp-sitemap.xml', '/post-sitemap.xml'
+    ]) {
       queue.add(origin.resolve(p));
     }
 
     final locRe = RegExp(
         r'<loc>\s*(?:<!\[CDATA\[)?\s*([^<\]\s]+)\s*(?:\]\]>)?\s*</loc>',
         caseSensitive: false);
+    final urlRe = RegExp(r'<url(?:\s[^>]*)?>(.*?)</url>', dotAll: true, caseSensitive: false);
+    final imgRe = RegExp(r'<image:loc>\s*(?:<!\[CDATA\[)?\s*([^<\]\s]+)', caseSensitive: false);
+    final modRe = RegExp(r'<lastmod>\s*([^<\s]+)\s*</lastmod>', caseSensitive: false);
+    final skipName = RegExp(
+        r'(^|[-_/.])(page|pages|category|categories|post_tag|tag|tags|author|authors|attachment|taxonomy|product_cat|user|users)([-_.]|$)',
+        caseSensitive: false);
+
     final seen = <String>{};
-    final urls = <String>{};
+    final out = <String, _SmEntry>{};
+    final deadline = DateTime.now().add(const Duration(seconds: 120));
     var fetched = 0;
-    while (queue.isNotEmpty && fetched < 40) {
-      final u = queue.removeAt(0);
-      if (!seen.add(u.toString()) || u.host != origin.host) continue;
+    while (queue.isNotEmpty && fetched < 60 && DateTime.now().isBefore(deadline)) {
+      final batch = <Uri>[];
+      while (queue.isNotEmpty && batch.length < 4) {
+        final u = queue.removeAt(0);
+        if (u.host != origin.host || !seen.add(u.toString())) continue;
+        batch.add(u);
+      }
+      if (batch.isEmpty) continue;
       progress.value = 'Reading sitemap...';
-      final r = await _get(c, u, seconds: 25);
-      fetched++;
-      if (r == null || r.statusCode != 200) continue;
-      final body = r.body;
-      final isIndex = body.contains('<sitemapindex');
-      for (final m in locRe.allMatches(body)) {
-        final raw = m.group(1)!.replaceAll('&amp;', '&');
-        final lu = Uri.tryParse(raw);
-        if (lu == null) continue;
-        if (isIndex || raw.toLowerCase().endsWith('.xml')) {
-          queue.add(lu);
-        } else {
-          final https = _https(raw);
-          final parsed = https == null ? null : Uri.tryParse(https);
-          if (parsed != null && _looksLikeContent(parsed, origin)) urls.add(parsed.toString());
+      final results = await Future.wait(batch.map((u) => _get(c, u, seconds: 20)));
+      for (var i = 0; i < batch.length; i++) {
+        final r = results[i];
+        fetched++;
+        if (r == null) {
+          _log('Sitemap file $fetched: no response');
+          continue;
         }
+        if (r.statusCode != 200) {
+          _log('Sitemap file $fetched: HTTP ${r.statusCode}');
+          continue;
+        }
+        final body = r.body;
+        if (body.contains('<sitemapindex')) {
+          var n = 0;
+          for (final m in locRe.allMatches(body)) {
+            final lu = Uri.tryParse(m.group(1)!.replaceAll('&amp;', '&'));
+            if (lu == null) continue;
+            final name = lu.pathSegments.isEmpty ? '' : lu.pathSegments.last;
+            if (skipName.hasMatch(name)) continue;
+            queue.add(lu);
+            n++;
+          }
+          _log('Sitemap index $fetched: $n content sitemap(s)');
+          continue;
+        }
+        var pages = 0;
+        for (final m in urlRe.allMatches(body)) {
+          final block = m.group(1)!;
+          final loc = locRe.firstMatch(block)?.group(1);
+          if (loc == null) continue;
+          final https = _https(loc.replaceAll('&amp;', '&'));
+          final parsed = https == null ? null : Uri.tryParse(https);
+          if (parsed == null || !_looksLikeContent(parsed, origin)) continue;
+          final img = imgRe.firstMatch(block)?.group(1)?.replaceAll('&amp;', '&');
+          out[parsed.toString()] = _SmEntry(parsed.toString(),
+              image: _https(img),
+              lastmod: DateTime.tryParse(modRe.firstMatch(block)?.group(1) ?? ''));
+          pages++;
+        }
+        _log('Sitemap file $fetched: $pages page(s)');
       }
     }
-    return urls.toList();
+    return out.values.toList();
+  }
+
+  String _titleFromUrl(String url) {
+    try {
+      final segs = Uri.parse(url).pathSegments.where((s) => s.isNotEmpty).toList();
+      if (segs.isEmpty) return '';
+      var slug = Uri.decodeComponent(segs.last)
+          .replaceAll(RegExp(r'\.(html?|php|aspx?)$', caseSensitive: false), '')
+          .replaceAll(RegExp(r'[-_+]+'), ' ')
+          .trim();
+      if (slug.length < 2) return '';
+      return slug
+          .split(' ')
+          .where((w) => w.isNotEmpty)
+          .map((w) => w[0].toUpperCase() + w.substring(1))
+          .join(' ');
+    } catch (_) {
+      return '';
+    }
+  }
+
+  void _enrich(Map<String, dynamic> it, _Found f) {
+    it['title'] = f.title;
+    it['content_type'] = _guessType(f.title);
+    it['release_year'] = _guessYear(f.title);
+    if (RegExp('hindi', caseSensitive: false).hasMatch(f.title)) it['language'] = 'Hindi';
+    if (f.poster != null) it['poster_url'] = f.poster;
+    if (f.synopsis != null) it['synopsis'] = f.synopsis;
+    if (f.video != null) it['video_url'] = f.video;
+    if (f.date != null) it['sort'] = f.date!.millisecondsSinceEpoch;
+    it['e'] = 1;
   }
 
   Future<_Found?> _readPage(http.Client c, String url, String label) async {
     try {
       final r = await _get(c, Uri.parse(url), seconds: 15);
-      if (r == null || r.statusCode != 200) return null;
+      if (r == null) {
+        _firstPageProblem ??= 'no response';
+        return null;
+      }
+      if (r.statusCode != 200) {
+        _firstPageProblem ??= 'HTTP ${r.statusCode}';
+        return null;
+      }
       if (!(r.headers['content-type']?.toLowerCase().contains('html') ?? false)) return null;
       if (r.bodyBytes.length > 3 * 1024 * 1024) return null;
       final doc = html_parser.parse(utf8.decode(r.bodyBytes, allowMalformed: true));
@@ -451,7 +601,7 @@ class SiteSyncService {
     final blockRe = RegExp(r'<(item|entry)[\s>].*?</\1>', dotAll: true, caseSensitive: false);
     for (final p in const ['/feed/', '/feed', '/rss.xml', '/feed.xml', '/atom.xml', '/rss']) {
       progress.value = 'Checking feed $p...';
-      final r = await _get(c, origin.resolve(p), seconds: 15);
+      final r = await _get(c, origin.resolve(p), seconds: 15, tag: 'Feed $p');
       if (r == null || r.statusCode != 200) continue;
       final blocks = blockRe.allMatches(r.body).map((m) => m.group(0)!).toList();
       if (blocks.isEmpty) continue;
@@ -495,7 +645,7 @@ class SiteSyncService {
     for (var page = 0; page < 10 && next != null; page++) {
       final current = next;
       progress.value = 'Reading page ${page + 1}...';
-      final r = await _get(c, current, seconds: 20);
+      final r = await _get(c, current, seconds: 20, tag: 'Page ${page + 1}');
       if (r == null || r.statusCode != 200) break;
       final doc = html_parser.parse(utf8.decode(r.bodyBytes, allowMalformed: true));
       for (final a in doc.querySelectorAll('a[href]')) {
@@ -526,12 +676,15 @@ class SiteSyncService {
   }
 
   // ----------------------------------------------------------------- helpers
-  Future<http.Response?> _get(http.Client c, Uri u, {int seconds = 15}) async {
+  Future<http.Response?> _get(http.Client c, Uri u, {int seconds = 15, String? tag}) async {
     try {
-      return await c
+      final r = await c
           .get(u, headers: const {'User-Agent': _ua, 'Accept': '*/*'})
           .timeout(Duration(seconds: seconds));
-    } catch (_) {
+      if (tag != null) _log('$tag: HTTP ${r.statusCode}');
+      return r;
+    } catch (e) {
+      if (tag != null) _log('$tag: ${e is TimeoutException ? 'timed out' : 'connection failed'}');
       return null;
     }
   }
@@ -540,8 +693,9 @@ class SiteSyncService {
       Map<String, Map<String, dynamic>> items, Set<String> skipped) async {
     final list = items.values.toList()
       ..sort((a, b) => ((b['sort'] as num?) ?? 0).compareTo((a['sort'] as num?) ?? 0));
-    await prefs.setString(_itemsKey, jsonEncode(list));
+    await prefs.setString(_itemsKey, jsonEncode(list.take(3000).toList()));
     await prefs.setStringList(_skippedKey, skipped.take(5000).toList());
+    revision.value++;
   }
 
   Map<String, Map<String, dynamic>> _decode(String? raw) {

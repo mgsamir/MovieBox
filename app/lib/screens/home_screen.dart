@@ -6,6 +6,7 @@ import '../services/catalog_service.dart';
 import '../services/site_sync_service.dart';
 import 'detail_screen.dart';
 import 'personal_links_screen.dart';
+import 'site_sync_screen.dart';
 import 'downloads_screen.dart';
 
 const bg = Color(0xFF101114), panel = Color(0xFF1D1F23), muted = Color(0xFF9A9DA5), mint = Color(0xFF22D6A0), blue = Color(0xFF21B7F3);
@@ -38,9 +39,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     restoreLocalData();
     load();
     loadSite();
+    SiteSyncService.instance.revision.addListener(siteChanged);
   }
   @override void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    SiteSyncService.instance.revision.removeListener(siteChanged);
     catalogNotifier.dispose();
     super.dispose();
   }
@@ -55,6 +58,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     setState(() => siteItems = cached);
     catalogNotifier.value = all;
     await autoSyncIfDue();
+  }
+  Future<void> siteChanged() async {
+    final cached = await SiteSyncService.instance.cachedItems();
+    if (!mounted) return;
+    setState(() => siteItems = cached);
+    catalogNotifier.value = all;
   }
   Future<void> autoSyncIfDue() async {
     if (syncing || !await SiteSyncService.instance.shouldAutoSync()) return;
@@ -436,6 +445,8 @@ class _SettingsPageState extends State<SettingsPage>{
         row('Notifications', tap: notificationOptions),
         divider(),
         row('Language', tap: languageOptions),
+        divider(),
+        row('Website sync', tap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const SiteSyncScreen()))),
         divider(),
         row('Watch Options', trailing: Text(mode == 'streaming' ? 'Streaming' : 'Download', style: const TextStyle(color: muted)), tap: watchOptions),
         divider(),

@@ -185,8 +185,16 @@ class _PersonalLinksScreenState extends State<PersonalLinksScreen> {
 
   Future<void> _download(Map<String, String> link) async {
     _showMessage('Checking webpage for a video source...');
+    ResolvedVideoSource source;
     try {
-      final source = await VideoLinkResolver.resolve(link['url']!);
+      source = await VideoLinkResolver.resolve(link['url']!);
+    } catch (_) {
+      if (!mounted) return;
+      _showMessage('Video not found automatically. Opening the page so you can play it there.');
+      await _openBrowserFinder(link);
+      return;
+    }
+    try {
       if (!source.canDownload) {
         throw const FormatException(
           'This page provides an HLS stream. Online playback may work, but offline download for this stream format is not supported yet.',
@@ -208,18 +216,22 @@ class _PersonalLinksScreenState extends State<PersonalLinksScreen> {
 
   Future<void> _play(Map<String, String> link) async {
     _showMessage('Finding a playable video on this link...');
+    ResolvedVideoSource source;
     try {
-      final source = await VideoLinkResolver.resolve(link['url']!);
+      source = await VideoLinkResolver.resolve(link['url']!);
+    } catch (_) {
       if (!mounted) return;
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => PlayerScreen(url: source.uri.toString()),
-        ),
-      );
-    } catch (error) {
-      _showMessage('Could not play: ${_friendlyError(error)}');
+      _showMessage('Video not found automatically. Opening the page so you can play it there.');
+      await _openBrowserFinder(link);
+      return;
     }
+    if (!mounted) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => PlayerScreen(url: source.uri.toString()),
+      ),
+    );
   }
 
   String _friendlyError(Object error) {

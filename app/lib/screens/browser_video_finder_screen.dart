@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+import '../services/download_service.dart';
 import 'player_screen.dart';
 
 class BrowserVideoFinderScreen extends StatefulWidget {
@@ -78,6 +79,21 @@ class _BrowserVideoFinderScreenState extends State<BrowserVideoFinderScreen> {
     try { await _controller.runJavaScript(_scanJs); } catch (_) {}
   }
 
+  Future<void> _download(String url) async {
+    try {
+      await DownloadService.instance.download(title: widget.title, url: url);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(content: Text('Download started. Check the Downloads tab.')));
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(content: Text('Could not start the download.')));
+    }
+  }
+
   @override
   void dispose() { _timer?.cancel(); super.dispose(); }
 
@@ -122,10 +138,19 @@ class _BrowserVideoFinderScreenState extends State<BrowserVideoFinderScreen> {
                     leading: const Icon(Icons.movie, color: Color(0xFF22D6A0)),
                     title: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
                     subtitle: Text(url.toLowerCase().contains('.m3u8') ? 'HLS stream' : 'Video file'),
-                    trailing: IconButton(
-                      icon: const Icon(Icons.play_arrow, color: Color(0xFF22D6A0)),
-                      onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => PlayerScreen(url: url))),
-                    ),
+                    trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                      if (!url.toLowerCase().contains('.m3u8'))
+                        IconButton(
+                          tooltip: 'Download',
+                          icon: const Icon(Icons.download, color: Color(0xFF22D6A0)),
+                          onPressed: () => _download(url),
+                        ),
+                      IconButton(
+                        tooltip: 'Play',
+                        icon: const Icon(Icons.play_arrow, color: Color(0xFF22D6A0)),
+                        onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => PlayerScreen(url: url))),
+                      ),
+                    ]),
                   );
                 },
               )),
