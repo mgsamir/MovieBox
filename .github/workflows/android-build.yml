@@ -35,9 +35,10 @@ jobs:
           p = Path("app/android/app/build.gradle.kts")
           s = p.read_text()
           if "keystorePropertiesFile" not in s:
+              s = "import java.util.Properties\n\n" + s
               s = s.replace(
                   "android {",
-                  """val keystoreProperties = java.util.Properties()
+                  """val keystoreProperties = Properties()
           val keystorePropertiesFile = rootProject.file("key.properties")
           if (keystorePropertiesFile.exists()) {
               keystoreProperties.load(keystorePropertiesFile.inputStream())
