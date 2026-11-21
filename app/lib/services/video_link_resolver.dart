@@ -71,7 +71,7 @@ class VideoLinkResolver {
 
     final response = await _client.get(
       pageUri,
-      headers: const {
+      headers: {
         'User-Agent': 'Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 Chrome/130 Mobile Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8',
         if (referer != null) 'Referer': referer.toString(),
