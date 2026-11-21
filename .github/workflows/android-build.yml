@@ -14,10 +14,10 @@ jobs:
       - run: cd app && flutter create --platforms=android .
       - name: Configure stable Android release signing
         env:
-          ANDROID_KEYSTORE_BASE64: ${{{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          ANDROID_KEYSTORE_PASSWORD: ${{{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           if [ -n "$ANDROID_KEYSTORE_BASE64" ]; then
             test -n "$ANDROID_KEYSTORE_PASSWORD"
@@ -74,8 +74,8 @@ jobs:
       - run: cd app && flutter pub get
       - name: Build MovieBox APK
         env:
-          SUPABASE_URL: ${{{ secrets.SUPABASE_URL }}
-          SUPABASE_ANON_KEY: ${{{ secrets.SUPABASE_ANON_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: |
           cd app
           flutter build apk --release \
