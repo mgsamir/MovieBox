@@ -12,14 +12,74 @@ jobs:
         with:
           channel: stable
       - run: cd app && flutter create --platforms=android .
+      - name: Configure stable Android release signing
+        env:
+          ANDROID_KEYSTORE_BASE64: \${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: \${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: \${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: \${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -n "$ANDROID_KEYSTORE_BASE64" ]; then
+            test -n "$ANDROID_KEYSTORE_PASSWORD"
+            test -n "$ANDROID_KEY_ALIAS"
+            test -n "$ANDROID_KEY_PASSWORD"
+            echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > app/android/app/moviebox-upload.jks
+            cat > app/android/key.properties <<EOF
+          storeFile=moviebox-upload.jks
+          storePassword=$ANDROID_KEYSTORE_PASSWORD
+          keyAlias=$ANDROID_KEY_ALIAS
+          keyPassword=$ANDROID_KEY_PASSWORD
+          EOF
+            python3 - <<'PY'
+          from pathlib import Path
+          p = Path("app/android/app/build.gradle.kts")
+          s = p.read_text()
+          if "keystorePropertiesFile" not in s:
+              s = s.replace(
+                  "android {",
+                  """val keystoreProperties = java.util.Properties()
+          val keystorePropertiesFile = rootProject.file("key.properties")
+          if (keystorePropertiesFile.exists()) {
+              keystoreProperties.load(keystorePropertiesFile.inputStream())
+          }
+
+          android {""",
+                  1,
+              )
+              s = s.replace(
+                  "    buildTypes {",
+                  """    signingConfigs {
+                  create("release") {
+                      keyAlias = keystoreProperties["keyAlias"] as String
+                      keyPassword = keystoreProperties["keyPassword"] as String
+                      storeFile = file(keystoreProperties["storeFile"] as String)
+                      storePassword = keystoreProperties["storePassword"] as String
+                  }
+              }
+
+              buildTypes {""",
+                  1,
+              )
+              s = s.replace(
+                  'signingConfig = signingConfigs.getByName("debug")',
+                  'signingConfig = if (keystorePropertiesFile.exists()) signingConfigs.getByName("release") else signingConfigs.getByName("debug")',
+                  1,
+              )
+              p.write_text(s)
+          PY
+            echo "Stable release signing configured."
+          else
+            echo "::warning::Signing secrets are not configured. This APK uses the temporary CI debug key and cannot update an install signed by a different key."
+          fi
       - run: cd app && flutter pub get
       - name: Build MovieBox APK
         env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          SUPABASE_URL: \${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: \${{ secrets.SUPABASE_ANON_KEY }}
         run: |
           cd app
           flutter build apk --release \
+            --build-number "$GITHUB_RUN_NUMBER" \
             --dart-define=SUPABASE_URL="$SUPABASE_URL" \
             --dart-define=SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY"
       - uses: actions/upload-artifact@v4
