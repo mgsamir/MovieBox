@@ -29,6 +29,7 @@ class _HomeScreenState extends State<HomeScreen> {
   String? error;
   List<ContentItem> catalog = [];
   List<ContentItem> siteItems = [];
+  String? cat; // selected category chip (null = All)
   bool syncing = false;
   final catalogNotifier = ValueNotifier<List<ContentItem>>([]);
   final Set<String> saved = {};
@@ -36,45 +37,54 @@ class _HomeScreenState extends State<HomeScreen> {
 
   List<ContentItem> get all => [...siteItems, ...catalog];
   // Newest titles first: the website's latest, or the catalogue's trending list.
-  List<ContentItem> get heroItems => (siteItems.isNotEmpty ? siteItems : catalog).take(6).toList();
+  List<ContentItem> get heroItems {
+    if (siteItems.isEmpty) return catalog.take(6).toList();
+    if (cat != null) return siteItems.where((e) => e.category == cat).take(6).toList();
+    final labels = SiteSyncHub.active.map((s) => s.source.label).toList();
+    final per = labels.length <= 1 ? 6 : 2;
+    final out = <ContentItem>[];
+    for (final l in labels) {
+      out.addAll(siteItems.where((e) => e.category == l).take(per));
+    }
+    return out.take(6).toList();
+  }
 
   @override void initState() {
     super.initState();
     restoreLocalData();
     load();
     loadSite();
-    SiteSyncService.instance.revision.addListener(siteChanged);
+    SiteSyncService.revision.addListener(siteChanged);
   }
   @override void dispose() {
-    SiteSyncService.instance.revision.removeListener(siteChanged);
+    SiteSyncService.revision.removeListener(siteChanged);
     catalogNotifier.dispose();
     super.dispose();
   }
 
   // ---------------- Website sync ----------------
   Future<void> loadSite() async {
-    final cached = await SiteSyncService.instance.cachedItems();
+    final cached = await SiteSyncHub.cachedItems();
     if (!mounted) return;
     setState(() => siteItems = cached);
     catalogNotifier.value = all;
     await autoSyncIfDue();
   }
   Future<void> siteChanged() async {
-    final cached = await SiteSyncService.instance.cachedItems();
+    final cached = await SiteSyncHub.cachedItems();
     if (!mounted) return;
     setState(() => siteItems = cached);
     catalogNotifier.value = all;
   }
   Future<void> autoSyncIfDue() async {
-    if (syncing || !await SiteSyncService.instance.shouldAutoSync()) return;
+    if (syncing || !await SiteSyncHub.shouldAutoSync()) return;
     await runSync();
   }
   Future<void> runSync({bool manual = false}) async {
-    if (syncing || SiteSyncService.instance.isRunning) return;
-    if ((await SiteSyncService.instance.savedUrl()) == null) return;
+    if (syncing || SiteSyncHub.isRunning || SiteSyncHub.active.isEmpty) return;
     setState(() => syncing = true);
-    final result = await SiteSyncService.instance.sync();
-    final cached = await SiteSyncService.instance.cachedItems();
+    final result = await SiteSyncHub.syncAll(force: manual);
+    final cached = await SiteSyncHub.cachedItems();
     if (!mounted) return;
     setState(() { syncing = false; siteItems = cached; });
     catalogNotifier.value = all;
@@ -201,10 +211,13 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget home() => RefreshIndicator(onRefresh: () async { runSync(manual: true); await load(force: true); }, child: CustomScrollView(slivers: [
     SliverToBoxAdapter(child: topBar()),
     if (syncing) SliverToBoxAdapter(child: syncBar()),
+    if (SiteSyncHub.active.length > 1) SliverToBoxAdapter(child: categoryBar()),
     if (heroItems.isNotEmpty) SliverToBoxAdapter(child: HeroBanner(items: heroItems, label: siteItems.isNotEmpty ? 'NEW' : 'TRENDING', onOpen: open)),
     if (history.isNotEmpty) SliverToBoxAdapter(child: section('Continue Watching', all.where((e) => history.containsKey(e.id)).toList())),
-    if (siteItems.isNotEmpty) SliverToBoxAdapter(child: section('My Website', siteItems)),
-    if (!loading && catalog.isNotEmpty) ...[
+    for (final site in SiteSyncHub.active)
+      if (cat == null || cat == site.source.label)
+        SliverToBoxAdapter(child: section(site.source.label, siteItems.where((e) => e.category == site.source.label).toList())),
+    if (!loading && catalog.isNotEmpty && cat == null) ...[
       SliverToBoxAdapter(child: section('Trending Now', catalog)),
       SliverToBoxAdapter(child: section('Movies', catalog.where((e) => e.type.toLowerCase() == 'movie').toList())),
       SliverToBoxAdapter(child: section('Web Series', catalog.where((e) => e.type.toLowerCase() == 'series').toList())),
@@ -243,13 +256,36 @@ class _HomeScreenState extends State<HomeScreen> {
     ]),
   );
 
+  Widget categoryBar() => SizedBox(
+    height: 46,
+    child: ListView(
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      children: [
+        for (final label in <String?>[null, ...SiteSyncHub.active.map((s) => s.source.label)])
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+            child: ChoiceChip(
+              label: Text(label ?? 'All'),
+              selected: cat == label,
+              onSelected: (_) => setState(() => cat = label),
+              backgroundColor: panel,
+              selectedColor: mint,
+              side: BorderSide.none,
+              labelStyle: TextStyle(color: cat == label ? Colors.black : Colors.white70, fontWeight: FontWeight.w600),
+            ),
+          ),
+      ],
+    ),
+  );
+
   Widget syncBar() => Padding(
     padding: const EdgeInsets.fromLTRB(18, 4, 18, 8),
     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       const LinearProgressIndicator(color: mint, backgroundColor: Colors.white12, minHeight: 3),
       const SizedBox(height: 6),
       ValueListenableBuilder<String?>(
-        valueListenable: SiteSyncService.instance.progress,
+        valueListenable: SiteSyncService.progress,
         builder: (_, text, __) => Text(text ?? 'Syncing your website...', style: const TextStyle(color: muted, fontSize: 12)),
       ),
     ]),
@@ -376,10 +412,10 @@ class PosterCard extends StatefulWidget {
 }
 
 class _PosterCardState extends State<PosterCard> {
-  String? get _siteUrl => widget.item.source == siteSourceName ? widget.item.sourceUrl : null;
+
   // Details of a website title are downloaded only while its card is on screen.
-  @override void initState() { super.initState(); SiteSyncService.instance.requestDetails(_siteUrl); }
-  @override void dispose() { SiteSyncService.instance.cancelDetails(_siteUrl); super.dispose(); }
+  @override void initState() { super.initState(); SiteSyncHub.requestDetails(widget.item); }
+  @override void dispose() { SiteSyncHub.cancelDetails(widget.item); super.dispose(); }
   @override Widget build(BuildContext context) {
     final item = widget.item;
     return InkWell(onTap: widget.onTap, borderRadius: BorderRadius.circular(12), child: SizedBox(width: 124, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -617,9 +653,9 @@ class HeroSlide extends StatefulWidget {
 }
 
 class _HeroSlideState extends State<HeroSlide> {
-  String? get _siteUrl => widget.item.source == siteSourceName ? widget.item.sourceUrl : null;
-  @override void initState() { super.initState(); SiteSyncService.instance.requestDetails(_siteUrl); }
-  @override void dispose() { SiteSyncService.instance.cancelDetails(_siteUrl); super.dispose(); }
+
+  @override void initState() { super.initState(); SiteSyncHub.requestDetails(widget.item); }
+  @override void dispose() { SiteSyncHub.cancelDetails(widget.item); super.dispose(); }
 
   @override Widget build(BuildContext context) {
     final item = widget.item;
