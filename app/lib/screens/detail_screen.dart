@@ -138,15 +138,20 @@ class _DetailScreenState extends State<DetailScreen> {
     return null;
   }
 
-  void _openBrowserFinder() {
+  Future<void> _openBrowserFinder({required bool download}) async {
     final url = widget.item.sourceUrl;
     if (url == null) return;
-    Navigator.push(
+    final result = await Navigator.push<String>(
       context,
       MaterialPageRoute(
-        builder: (_) => BrowserVideoFinderScreen(pageUrl: url, title: widget.item.title),
+        builder: (_) => BrowserVideoFinderScreen(
+          pageUrl: url,
+          title: widget.item.title,
+          auto: download ? 'download' : 'play',
+        ),
       ),
     );
+    if (result == 'downloading') _snack('Download started. Check the Downloads tab.');
   }
 
   Future<void> _siteAction({required bool download}) async {
@@ -157,8 +162,9 @@ class _DetailScreenState extends State<DetailScreen> {
     if (!mounted) return;
     setState(() => _busy = false);
     if (source == null) {
-      _snack('Opening the page. Play the video there and it will be detected.');
-      _openBrowserFinder();
+      // Not in the page's HTML: find it inside the app, no browser is shown.
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      await _openBrowserFinder(download: download);
       return;
     }
     if (!download) {

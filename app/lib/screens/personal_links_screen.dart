@@ -191,7 +191,7 @@ class _PersonalLinksScreenState extends State<PersonalLinksScreen> {
     } catch (_) {
       if (!mounted) return;
       _showMessage('Video not found automatically. Opening the page so you can play it there.');
-      await _openBrowserFinder(link);
+      await _openBrowserFinder(link, auto: 'download');
       return;
     }
     try {
@@ -210,8 +210,9 @@ class _PersonalLinksScreenState extends State<PersonalLinksScreen> {
     }
   }
 
-  Future<void> _openBrowserFinder(Map<String, String> link) async {
-    await Navigator.push(context, MaterialPageRoute(builder: (_) => BrowserVideoFinderScreen(pageUrl: link['url']!, title: link['title'] ?? 'Video Browser')));
+  Future<void> _openBrowserFinder(Map<String, String> link, {String? auto}) async {
+    final result = await Navigator.push<String>(context, MaterialPageRoute(builder: (_) => BrowserVideoFinderScreen(pageUrl: link['url']!, title: link['title'] ?? 'Video Browser', auto: auto)));
+    if (result == 'downloading') _showMessage('Download started: ${link['title']}');
   }
 
   Future<void> _play(Map<String, String> link) async {
@@ -222,7 +223,7 @@ class _PersonalLinksScreenState extends State<PersonalLinksScreen> {
     } catch (_) {
       if (!mounted) return;
       _showMessage('Video not found automatically. Opening the page so you can play it there.');
-      await _openBrowserFinder(link);
+      await _openBrowserFinder(link, auto: 'play');
       return;
     }
     if (!mounted) return;
