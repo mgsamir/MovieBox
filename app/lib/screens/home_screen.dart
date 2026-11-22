@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -34,6 +35,8 @@ class _HomeScreenState extends State<HomeScreen> {
   final Map<String, double> history = {};
 
   List<ContentItem> get all => [...siteItems, ...catalog];
+  // Newest titles first: the website's latest, or the catalogue's trending list.
+  List<ContentItem> get heroItems => (siteItems.isNotEmpty ? siteItems : catalog).take(6).toList();
 
   @override void initState() {
     super.initState();
@@ -198,6 +201,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget home() => RefreshIndicator(onRefresh: () async { runSync(manual: true); await load(force: true); }, child: CustomScrollView(slivers: [
     SliverToBoxAdapter(child: topBar()),
     if (syncing) SliverToBoxAdapter(child: syncBar()),
+    if (heroItems.isNotEmpty) SliverToBoxAdapter(child: HeroBanner(items: heroItems, label: siteItems.isNotEmpty ? 'NEW' : 'TRENDING', onOpen: open)),
     if (history.isNotEmpty) SliverToBoxAdapter(child: section('Continue Watching', all.where((e) => history.containsKey(e.id)).toList())),
     if (siteItems.isNotEmpty) SliverToBoxAdapter(child: section('My Website', siteItems)),
     if (!loading && catalog.isNotEmpty) ...[
@@ -549,4 +553,112 @@ class _SettingsPageState extends State<SettingsPage>{
     RadioListTile<String>(value:'download',groupValue:mode,activeColor:mint,title:const Text('Download'),subtitle:const Text('Download first, then watch offline'),onChanged:(v)=>update(()=>mode=v!)),
     const SizedBox(height:10),SizedBox(width:double.infinity,child:FilledButton(onPressed:(){widget.onMode(mode);setState((){});Navigator.pop(ctx);},child:const Text('Save')))
   ]))));
+}
+
+
+// ---------------- Hero banner (newest / trending first) ----------------
+class HeroBanner extends StatefulWidget {
+  final List<ContentItem> items;
+  final String label;
+  final ValueChanged<ContentItem> onOpen;
+  const HeroBanner({super.key, required this.items, required this.label, required this.onOpen});
+  @override State<HeroBanner> createState() => _HeroBannerState();
+}
+
+class _HeroBannerState extends State<HeroBanner> {
+  final _controller = PageController();
+  Timer? _timer;
+  int _index = 0;
+
+  @override void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (!mounted || widget.items.length < 2 || !_controller.hasClients) return;
+      _controller.animateToPage((_index + 1) % widget.items.length,
+          duration: const Duration(milliseconds: 450), curve: Curves.easeOut);
+    });
+  }
+  @override void dispose() { _timer?.cancel(); _controller.dispose(); super.dispose(); }
+
+  @override Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.fromLTRB(16, 8, 16, 6),
+    child: ClipRRect(
+      borderRadius: BorderRadius.circular(20),
+      child: SizedBox(height: 300, child: Stack(children: [
+        PageView.builder(
+          controller: _controller,
+          itemCount: widget.items.length,
+          onPageChanged: (i) => setState(() => _index = i),
+          itemBuilder: (_, i) => HeroSlide(item: widget.items[i], label: widget.label, onOpen: widget.onOpen),
+        ),
+        Positioned(right: 14, bottom: 14, child: Row(children: [
+          for (var i = 0; i < widget.items.length; i++)
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 250),
+              margin: const EdgeInsets.only(left: 5),
+              width: i == _index ? 18 : 6, height: 6,
+              decoration: BoxDecoration(
+                color: i == _index ? mint : Colors.white38,
+                borderRadius: BorderRadius.circular(3),
+              ),
+            ),
+        ])),
+      ])),
+    ),
+  );
+}
+
+class HeroSlide extends StatefulWidget {
+  final ContentItem item;
+  final String label;
+  final ValueChanged<ContentItem> onOpen;
+  const HeroSlide({super.key, required this.item, required this.label, required this.onOpen});
+  @override State<HeroSlide> createState() => _HeroSlideState();
+}
+
+class _HeroSlideState extends State<HeroSlide> {
+  String? get _siteUrl => widget.item.source == siteSourceName ? widget.item.sourceUrl : null;
+  @override void initState() { super.initState(); SiteSyncService.instance.requestDetails(_siteUrl); }
+  @override void dispose() { SiteSyncService.instance.cancelDetails(_siteUrl); super.dispose(); }
+
+  @override Widget build(BuildContext context) {
+    final item = widget.item;
+    final meta = [if (item.year != null) item.year.toString(), item.type, if (item.language != null) item.language!].join(' • ');
+    return GestureDetector(
+      onTap: () => widget.onOpen(item),
+      child: Stack(fit: StackFit.expand, children: [
+        Container(decoration: const BoxDecoration(gradient: LinearGradient(
+          begin: Alignment.topLeft, end: Alignment.bottomRight, colors: [Color(0xFF16323A), Color(0xFF2A1F33)]))),
+        if (item.posterUrl != null)
+          Image.network(
+            item.posterUrl!,
+            fit: BoxFit.cover,
+            alignment: Alignment.topCenter,
+            cacheWidth: 800,
+            errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+          ),
+        const DecoratedBox(decoration: BoxDecoration(gradient: LinearGradient(
+          begin: Alignment.topCenter, end: Alignment.bottomCenter,
+          colors: [Colors.transparent, Color(0x99101114), Color(0xFF101114)], stops: [.35, .7, 1]))),
+        Positioned(left: 14, top: 14, child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+          decoration: BoxDecoration(color: mint, borderRadius: BorderRadius.circular(6)),
+          child: Text(widget.label, style: const TextStyle(color: Colors.black, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: .6)),
+        )),
+        Positioned(left: 16, right: 16, bottom: 16, child: Column(
+          mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(item.title, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800, height: 1.15)),
+          const SizedBox(height: 4),
+          Text(meta, style: const TextStyle(color: Colors.white70, fontSize: 12.5)),
+          const SizedBox(height: 10),
+          FilledButton.icon(
+            onPressed: () => widget.onOpen(item),
+            icon: const Icon(Icons.play_arrow, size: 20),
+            label: const Text('Watch now'),
+            style: FilledButton.styleFrom(backgroundColor: mint, foregroundColor: Colors.black, visualDensity: VisualDensity.compact),
+          ),
+        ])),
+      ]),
+    );
+  }
 }
