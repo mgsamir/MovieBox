@@ -6,7 +6,9 @@ import '../services/catalog_service.dart';
 import '../services/download_service.dart';
 import '../services/site_sync_service.dart';
 import '../services/video_link_resolver.dart';
+import '../services/media_options.dart';
 import 'browser_video_finder_screen.dart';
+import 'download_sheet.dart';
 import 'player_screen.dart';
 
 class DetailScreen extends StatefulWidget {
@@ -156,6 +158,26 @@ class _DetailScreenState extends State<DetailScreen> {
 
   Future<void> _siteAction({required bool download}) async {
     if (_busy) return;
+    if (download) {
+      // Show every available language and quality, like a download picker.
+      setState(() => _busy = true);
+      _snack('Finding available languages and quality...');
+      final item = widget.item;
+      final direct = item.videoUrl;
+      final options = await MediaOptionsFinder.find(
+        pageUrl: item.sourceUrl,
+        directUrl: (direct != null && direct.startsWith('https://')) ? direct : null,
+        languageHint: item.title,
+      );
+      if (!mounted) return;
+      setState(() => _busy = false);
+      if (options.any((o) => !o.isStream)) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        await showDownloadSheet(context, title: item.title, options: options);
+        return;
+      }
+      // Nothing listed in the page: continue with the single-video search below.
+    }
     setState(() => _busy = true);
     _snack('Finding the video...');
     final source = await _resolveSite();
