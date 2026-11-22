@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -14,7 +15,7 @@ import 'downloads_screen.dart';
 
 const bg = Color(0xFF101114), panel = Color(0xFF1D1F23), muted = Color(0xFF9A9DA5), mint = Color(0xFF22D6A0), blue = Color(0xFF21B7F3);
 
-const _searchHint = 'Search movies, series, anime...';
+const _searchHint = 'Search Movie/Series/Audio';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -29,21 +30,19 @@ class _HomeScreenState extends State<HomeScreen> {
   String? error;
   List<ContentItem> catalog = [];
   List<ContentItem> siteItems = [];
-  String? cat; // selected website category (null = All)
   String? fGenre;
   int? fYear;
   int mode = 0; // 0 Home, 1 Movie, 2 TV/Series, 3 Anime
-  static const _modes = ['Home', 'Movie', 'TV/Series', 'Anime'];
+  static const _modes = ['Trending', 'Movie', 'TV/Series', 'Anime'];
   bool syncing = false;
   final catalogNotifier = ValueNotifier<List<ContentItem>>([]);
   final Set<String> saved = {};
   final Map<String, double> history = {};
 
   List<ContentItem> get all => [...siteItems, ...catalog];
-  // Newest titles first: the website's latest, or the catalogue's trending list.
+  // Newest titles first: a couple from every website, or the catalogue's trending list.
   List<ContentItem> get heroItems {
     if (siteItems.isEmpty) return catalog.take(6).toList();
-    if (cat != null) return siteItems.where((e) => e.category == cat).take(6).toList();
     final labels = SiteSyncHub.active.map((s) => s.source.label).toList();
     final per = labels.length <= 1 ? 6 : 2;
     final out = <ContentItem>[];
@@ -51,6 +50,27 @@ class _HomeScreenState extends State<HomeScreen> {
       out.addAll(siteItems.where((e) => e.category == l).take(per));
     }
     return out.take(6).toList();
+  }
+
+  // Everything below the banner scrolls vertically: the websites' titles
+  // mixed one by one, newest first, then the catalogue.
+  List<ContentItem> get feed {
+    if (siteItems.isEmpty) return catalog;
+    final groups = SiteSyncHub.active
+        .map((s) => siteItems.where((e) => e.category == s.source.label).toList())
+        .toList();
+    final out = <ContentItem>[];
+    for (var i = 0;; i++) {
+      var any = false;
+      for (final g in groups) {
+        if (i < g.length) {
+          out.add(g[i]);
+          any = true;
+        }
+      }
+      if (!any) break;
+    }
+    return out..addAll(catalog);
   }
 
   @override void initState() {
@@ -214,41 +234,45 @@ class _HomeScreenState extends State<HomeScreen> {
   // ---------------- Home ----------------
   Widget home() => RefreshIndicator(onRefresh: () async { runSync(manual: true); await load(force: true); }, child: CustomScrollView(slivers: [
     SliverToBoxAdapter(child: topBar()),
-    SliverToBoxAdapter(child: modeTabs()),
     if (syncing) SliverToBoxAdapter(child: syncBar()),
-    if (mode != 0) ...browseSlivers() else ...[
-      if (heroItems.isNotEmpty) SliverToBoxAdapter(child: HeroBanner(items: heroItems, onOpen: open)),
-      if (SiteSyncHub.active.length > 1) SliverToBoxAdapter(child: categoriesRow()),
-      if (history.isNotEmpty) SliverToBoxAdapter(child: section('Continue Watching', all.where((e) => history.containsKey(e.id)).toList())),
-      for (final site in SiteSyncHub.active)
-        if (cat == null || cat == site.source.label)
-          SliverToBoxAdapter(child: section(site.source.label, siteItems.where((e) => e.category == site.source.label).toList())),
-      if (!loading && catalog.isNotEmpty && cat == null) ...[
-        SliverToBoxAdapter(child: section('Trending Now', catalog)),
-        SliverToBoxAdapter(child: section('Movies', catalog.where((e) => e.type.toLowerCase() == 'movie').toList())),
-        SliverToBoxAdapter(child: section('Web Series', catalog.where((e) => e.type.toLowerCase() == 'series').toList())),
-        SliverToBoxAdapter(child: section('Anime', catalog.where((e) => e.type.toLowerCase() == 'anime').toList())),
-      ],
-      if (loading && siteItems.isEmpty) const SliverToBoxAdapter(child: Padding(padding: EdgeInsets.all(28), child: Center(child: CircularProgressIndicator(color: mint)))),
+    if (mode != 0) ...[
+      SliverToBoxAdapter(child: modeTabs()),
+      ...browseSlivers(),
+    ] else ...[
+      if (heroItems.isNotEmpty)
+        SliverToBoxAdapter(child: HeroBanner(items: heroItems, header: modeTabs(overlay: true), onOpen: open))
+      else
+        SliverToBoxAdapter(child: modeTabs()),
+      ...gridSlivers(feed),
+      if (loading && all.isEmpty) const SliverToBoxAdapter(child: Padding(padding: EdgeInsets.all(28), child: Center(child: CircularProgressIndicator(color: mint)))),
       if (error != null && all.isEmpty && !syncing) SliverToBoxAdapter(child: message(error!, true)),
     ],
     const SliverToBoxAdapter(child: SizedBox(height: 24)),
   ]));
 
-  // ---------------- Tabs + Movie / TV / Anime browsing with filters ----------------
-  Widget modeTabs() => SizedBox(
+  // ---------------- Tabs, vertical grids and filters ----------------
+  // Light text, the selected one bold: like the reference app.
+  Widget modeTabs({bool overlay = false}) => SizedBox(
     height: 46,
-    child: Row(children: [
-      for (var i = 0; i < _modes.length; i++)
-        Expanded(child: InkWell(
-          onTap: () => setState(() { mode = i; fGenre = null; fYear = null; }),
-          child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-            Text(_modes[i], style: TextStyle(fontSize: 16, fontWeight: mode == i ? FontWeight.w800 : FontWeight.w500, color: mode == i ? Colors.white : Colors.white60)),
-            const SizedBox(height: 5),
-            Container(width: 24, height: 3, decoration: BoxDecoration(color: mode == i ? mint : Colors.transparent, borderRadius: BorderRadius.circular(2))),
-          ]),
-        )),
-    ]),
+    child: ListView(
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.symmetric(horizontal: 10),
+      children: [
+        for (var i = 0; i < _modes.length; i++)
+          InkWell(
+            onTap: () => setState(() { mode = i; fGenre = null; fYear = null; }),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              child: Center(child: Text(_modes[i], style: TextStyle(
+                fontSize: 16,
+                fontWeight: mode == i ? FontWeight.w800 : FontWeight.w400,
+                color: mode == i ? Colors.white : const Color(0xA6FFFFFF),
+                shadows: overlay ? const [Shadow(blurRadius: 6, color: Colors.black54)] : null,
+              ))),
+            ),
+          ),
+      ],
+    ),
   );
 
   bool _isAnime(ContentItem e) => e.type.toLowerCase() == 'anime' || e.category == 'Anime';
@@ -260,10 +284,22 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  List<Widget> gridSlivers(List<ContentItem> items) => [
+    SliverPadding(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+      sliver: SliverGrid(
+        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 3, childAspectRatio: .47, crossAxisSpacing: 10, mainAxisSpacing: 14),
+        delegate: SliverChildBuilderDelegate(
+          (_, i) => BrowseCard(item: items[i], onTap: () => open(items[i])),
+          childCount: items.length,
+        ),
+      ),
+    ),
+  ];
+
   List<Widget> browseSlivers() {
     final base = modeItems();
     final items = base.where((e) =>
-        (cat == null || e.category == cat) &&
         (fGenre == null || e.genres.contains(fGenre)) &&
         (fYear == null || e.year == fYear)).toList();
     return [
@@ -272,16 +308,7 @@ class _HomeScreenState extends State<HomeScreen> {
         padding: const EdgeInsets.all(40),
         child: Center(child: Text(loading || syncing ? 'Loading titles...' : 'No titles match these filters', style: const TextStyle(color: muted))),
       )),
-      SliverPadding(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-        sliver: SliverGrid(
-          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 3, childAspectRatio: .47, crossAxisSpacing: 10, mainAxisSpacing: 14),
-          delegate: SliverChildBuilderDelegate(
-            (_, i) => BrowseCard(item: items[i], onTap: () => open(items[i])),
-            childCount: items.length,
-          ),
-        ),
-      ),
+      ...gridSlivers(items),
     ];
   }
 
@@ -292,18 +319,16 @@ class _HomeScreenState extends State<HomeScreen> {
     }
     final genres = counts.keys.toList()..sort((a, b) => counts[b]!.compareTo(counts[a]!));
     final years = base.map((e) => e.year).whereType<int>().toSet().toList()..sort((a, b) => b.compareTo(a));
-    final labels = SiteSyncHub.active.map((s) => s.source.label).toList();
-    final any = cat != null || fGenre != null || fYear != null;
+    final any = fGenre != null || fYear != null;
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 4, 8, 4),
       child: SingleChildScrollView(scrollDirection: Axis.horizontal, child: Row(children: [
-        if (labels.length > 1) filterPill('Category', cat, labels, (v) => cat = v),
         filterPill('Genre', fGenre, genres.take(40).toList(), (v) => fGenre = v),
         filterPill('Year', fYear?.toString(), years.take(60).map((e) => e.toString()).toList(), (v) => fYear = v == null ? null : int.tryParse(v)),
         if (any) IconButton(
           tooltip: 'Clear filters',
           icon: const Icon(Icons.filter_alt_off_outlined),
-          onPressed: () => setState(() { cat = null; fGenre = null; fYear = null; }),
+          onPressed: () => setState(() { fGenre = null; fYear = null; }),
         ),
       ])),
     );
@@ -381,34 +406,6 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       )),
     ]),
-  );
-
-  Widget categoriesRow() => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-    const Padding(padding: EdgeInsets.fromLTRB(18, 8, 16, 2), child: Text('Categories', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800))),
-    categoryBar(),
-  ]);
-
-  Widget categoryBar() => SizedBox(
-    height: 46,
-    child: ListView(
-      scrollDirection: Axis.horizontal,
-      padding: const EdgeInsets.symmetric(horizontal: 12),
-      children: [
-        for (final label in <String?>[null, ...SiteSyncHub.active.map((s) => s.source.label)])
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
-            child: ChoiceChip(
-              label: Text(label ?? 'All'),
-              selected: cat == label,
-              onSelected: (_) => setState(() => cat = label),
-              backgroundColor: panel,
-              selectedColor: mint,
-              side: BorderSide.none,
-              labelStyle: TextStyle(color: cat == label ? Colors.black : Colors.white70, fontWeight: FontWeight.w600),
-            ),
-          ),
-      ],
-    ),
   );
 
   Widget syncBar() => Padding(
@@ -598,53 +595,78 @@ class SearchScreen extends StatefulWidget {
   @override State<SearchScreen> createState() => _SearchScreenState();
 }
 class _SearchScreenState extends State<SearchScreen> {
-  String query = '', type = 'all';
-  List<ContentItem> filter(List<ContentItem> all) => all.where((e) =>
-      (type == 'all' || e.type.toLowerCase() == type) &&
-      (query.isEmpty || e.title.toLowerCase().contains(query.toLowerCase()))).toList();
+  String query = '';
+  String? cat; // website category, null = All
 
-  @override Widget build(BuildContext context) => Scaffold(
-    backgroundColor: bg,
-    appBar: AppBar(backgroundColor: bg, title: const Text('Search')),
-    body: Column(children: [
-      Padding(padding: const EdgeInsets.fromLTRB(16, 4, 16, 0), child: TextField(
-        autofocus: true,
-        onChanged: (v) => setState(() => query = v),
-        decoration: InputDecoration(
-          hintText: 'What do you want to watch?',
-          prefixIcon: const Icon(Icons.search),
-          filled: true, fillColor: panel,
-          border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none),
+  List<ContentItem> filter(List<ContentItem> all) {
+    final q = query.trim().toLowerCase();
+    return all.where((e) =>
+        (cat == null || e.category == cat) &&
+        (q.isEmpty || e.title.toLowerCase().contains(q))).toList();
+  }
+
+  @override Widget build(BuildContext context) {
+    final labels = SiteSyncHub.active.map((s) => s.source.label).toList();
+    return Scaffold(
+      backgroundColor: bg,
+      appBar: AppBar(
+        backgroundColor: bg,
+        titleSpacing: 0,
+        title: TextField(
+          autofocus: true,
+          onChanged: (v) => setState(() => query = v),
+          decoration: InputDecoration(
+            hintText: 'Search Movie/Series/Audio',
+            prefixIcon: const Icon(Icons.search),
+            filled: true, fillColor: panel,
+            contentPadding: const EdgeInsets.symmetric(vertical: 0),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+          ),
         ),
-      )),
-      const SizedBox(height: 10),
-      SizedBox(height: 44, child: ListView(scrollDirection: Axis.horizontal, padding: const EdgeInsets.symmetric(horizontal: 12), children: [
-        chip('All', 'all'), chip('Movies', 'movie'), chip('Series', 'series'), chip('Anime', 'anime'),
-      ])),
-      Expanded(child: ValueListenableBuilder<List<ContentItem>>(
-        valueListenable: widget.catalog,
-        builder: (_, all, __) {
-          final results = filter(all);
-          if (results.isEmpty) return const Center(child: Text('No titles found', style: TextStyle(color: muted)));
-          return GridView.builder(
-            padding: const EdgeInsets.all(16),
-            itemCount: results.length,
-            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 3, childAspectRatio: .57, crossAxisSpacing: 10, mainAxisSpacing: 14),
-            itemBuilder: (_, i) => PosterCard(item: results[i], onTap: () => widget.onOpen(results[i])),
-          );
-        },
-      )),
-    ]),
-  );
-  Widget chip(String label, String value) => Padding(
-    padding: const EdgeInsets.symmetric(horizontal: 4),
-    child: ChoiceChip(
-      label: Text(label), selected: type == value,
-      onSelected: (_) => setState(() => type = value),
-      backgroundColor: panel, selectedColor: mint, side: BorderSide.none,
-      labelStyle: TextStyle(color: type == value ? Colors.black : Colors.white70, fontWeight: FontWeight.w600),
-    ),
-  );
+        actions: const [SizedBox(width: 12)],
+      ),
+      body: Column(children: [
+        if (labels.length > 1) SizedBox(height: 46, child: ListView(
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          children: [
+            for (final label in <String?>[null, ...labels])
+              InkWell(
+                onTap: () => setState(() => cat = label),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 14),
+                  child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                    Text(label ?? 'All', style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: cat == label ? FontWeight.w800 : FontWeight.w400,
+                      color: cat == label ? Colors.white : const Color(0xA6FFFFFF),
+                    )),
+                    const SizedBox(height: 5),
+                    Container(width: 22, height: 3, decoration: BoxDecoration(
+                      color: cat == label ? mint : Colors.transparent,
+                      borderRadius: BorderRadius.circular(2),
+                    )),
+                  ]),
+                ),
+              ),
+          ],
+        )),
+        Expanded(child: ValueListenableBuilder<List<ContentItem>>(
+          valueListenable: widget.catalog,
+          builder: (_, all, __) {
+            final results = filter(all);
+            if (results.isEmpty) return const Center(child: Text('No titles found', style: TextStyle(color: muted)));
+            return GridView.builder(
+              padding: const EdgeInsets.all(16),
+              itemCount: results.length,
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 3, childAspectRatio: .47, crossAxisSpacing: 10, mainAxisSpacing: 14),
+              itemBuilder: (_, i) => BrowseCard(item: results[i], onTap: () => widget.onOpen(results[i])),
+            );
+          },
+        )),
+      ]),
+    );
+  }
 }
 
 // ---------------- Collections ----------------
@@ -724,11 +746,12 @@ class _SettingsPageState extends State<SettingsPage>{
 }
 
 
-// ---------------- Hero banner + mini cards (newest / trending first) ----------------
+// ---------------- Hero banner + mini cards (like the reference app) ----------------
 class HeroBanner extends StatefulWidget {
   final List<ContentItem> items;
+  final Widget header; // the tabs, drawn over the top of the banner
   final ValueChanged<ContentItem> onOpen;
-  const HeroBanner({super.key, required this.items, required this.onOpen});
+  const HeroBanner({super.key, required this.items, required this.header, required this.onOpen});
   @override State<HeroBanner> createState() => _HeroBannerState();
 }
 
@@ -737,6 +760,7 @@ class _HeroBannerState extends State<HeroBanner> {
   final _strip = ScrollController();
   Timer? _timer;
   int _index = 0;
+  static const _cardExtent = 256.0;
 
   @override void initState() {
     super.initState();
@@ -751,29 +775,112 @@ class _HeroBannerState extends State<HeroBanner> {
   void _changed(int i) {
     setState(() => _index = i);
     if (_strip.hasClients) {
-      _strip.animateTo((i * 312.0).clamp(0.0, _strip.position.maxScrollExtent),
+      _strip.animateTo((i * _cardExtent).clamp(0.0, _strip.position.maxScrollExtent),
           duration: const Duration(milliseconds: 350), curve: Curves.easeOut);
     }
   }
 
-  @override Widget build(BuildContext context) => SizedBox(
-    height: 420,
-    child: Stack(children: [
-      Positioned(top: 0, left: 0, right: 0, height: 390, child: PageView.builder(
-        controller: _page,
-        itemCount: widget.items.length,
-        onPageChanged: _changed,
-        itemBuilder: (_, i) => HeroSlide(item: widget.items[i], onOpen: widget.onOpen),
-      )),
-      Positioned(left: 0, right: 0, bottom: 0, height: 96, child: ListView.builder(
-        controller: _strip,
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        itemCount: widget.items.length,
-        itemBuilder: (_, i) => MiniCard(item: widget.items[i], selected: i == _index, onOpen: widget.onOpen),
-      )),
-    ]),
-  );
+  @override Widget build(BuildContext context) {
+    final heroH = MediaQuery.of(context).size.width * 0.62 + 24; // wide, edge to edge
+    const stripH = 84.0;
+    return SizedBox(
+      height: heroH + stripH - 24,
+      child: Stack(children: [
+        Positioned(top: 0, left: 0, right: 0, height: heroH, child: PageView.builder(
+          controller: _page,
+          itemCount: widget.items.length,
+          onPageChanged: _changed,
+          itemBuilder: (_, i) => HeroSlide(item: widget.items[i], onOpen: widget.onOpen),
+        )),
+        // light at the top so the tabs are readable
+        const Positioned(top: 0, left: 0, right: 0, height: 90, child: IgnorePointer(child: DecoratedBox(
+          decoration: BoxDecoration(gradient: LinearGradient(
+            begin: Alignment.topCenter, end: Alignment.bottomCenter,
+            colors: [Color(0xB3000000), Colors.transparent]))))),
+        Positioned(top: 0, left: 0, right: 0, child: widget.header),
+        Positioned(left: 0, right: 0, top: heroH - 24, height: stripH, child: ListView.builder(
+          controller: _strip,
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.only(left: 12, right: 12),
+          itemCount: widget.items.length,
+          itemBuilder: (_, i) => MiniCard(item: widget.items[i], selected: i == _index, onOpen: widget.onOpen),
+        )),
+      ]),
+    );
+  }
+}
+
+/// The wide banner picture. It prefers a landscape image of the title; the
+/// small card below keeps the poster, so the two pictures differ.
+class HeroImage extends StatefulWidget {
+  final ContentItem item;
+  const HeroImage({super.key, required this.item});
+  @override State<HeroImage> createState() => _HeroImageState();
+}
+
+class _HeroImageState extends State<HeroImage> {
+  ImageProvider? _provider;
+  ImageProvider? _fallback;
+  bool _landscape = false;
+
+  List<String> get _urls => [
+    if (widget.item.backdropUrl != null) widget.item.backdropUrl!,
+    if (widget.item.posterUrl != null && widget.item.posterUrl != widget.item.backdropUrl) widget.item.posterUrl!,
+  ];
+
+  @override void initState() { super.initState(); _pick(0); }
+  @override void didUpdateWidget(HeroImage old) {
+    super.didUpdateWidget(old);
+    if (old.item.backdropUrl != widget.item.backdropUrl || old.item.posterUrl != widget.item.posterUrl) {
+      _provider = null;
+      _fallback = null;
+      _pick(0);
+    }
+  }
+
+  void _pick(int i) {
+    final urls = _urls;
+    if (i >= urls.length) {
+      if (mounted && _provider == null && _fallback != null) setState(() => _provider = _fallback);
+      return;
+    }
+    final provider = NetworkImage(urls[i]);
+    final stream = provider.resolve(const ImageConfiguration());
+    late final ImageStreamListener listener;
+    listener = ImageStreamListener((info, _) {
+      stream.removeListener(listener);
+      if (!mounted) return;
+      final ratio = info.image.width / info.image.height;
+      if (ratio >= 1.3) {
+        setState(() { _provider = provider; _landscape = true; });
+      } else {
+        _fallback ??= provider;
+        if (i + 1 >= urls.length) {
+          setState(() { _provider = _fallback; _landscape = false; });
+        } else {
+          _pick(i + 1);
+        }
+      }
+    }, onError: (_, __) {
+      stream.removeListener(listener);
+      if (mounted) _pick(i + 1);
+    });
+    stream.addListener(listener);
+  }
+
+  @override Widget build(BuildContext context) {
+    final p = _provider;
+    if (p == null) return const SizedBox.expand();
+    if (_landscape) {
+      return Image(image: p, fit: BoxFit.cover, alignment: Alignment.topCenter, width: double.infinity, height: double.infinity);
+    }
+    // Only a portrait poster exists: blurred copy behind, sharp poster in front.
+    return Stack(fit: StackFit.expand, children: [
+      ImageFiltered(imageFilter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18), child: Image(image: p, fit: BoxFit.cover)),
+      const ColoredBox(color: Color(0x55000000)),
+      Center(child: Padding(padding: const EdgeInsets.only(top: 34, bottom: 14), child: Image(image: p, fit: BoxFit.contain))),
+    ]);
+  }
 }
 
 class HeroSlide extends StatefulWidget {
@@ -787,32 +894,17 @@ class _HeroSlideState extends State<HeroSlide> {
   @override void initState() { super.initState(); SiteSyncHub.requestDetails(widget.item); }
   @override void dispose() { SiteSyncHub.cancelDetails(widget.item); super.dispose(); }
 
-  @override Widget build(BuildContext context) {
-    final item = widget.item;
-    return GestureDetector(
-      onTap: () => widget.onOpen(item),
-      child: Stack(fit: StackFit.expand, children: [
-        Container(decoration: const BoxDecoration(gradient: LinearGradient(
-          begin: Alignment.topLeft, end: Alignment.bottomRight, colors: [Color(0xFF16323A), Color(0xFF2A1F33)]))),
-        if (item.posterUrl != null)
-          Image.network(
-            item.posterUrl!,
-            fit: BoxFit.cover,
-            alignment: Alignment.topCenter,
-            cacheWidth: 900,
-            errorBuilder: (_, __, ___) => const SizedBox.shrink(),
-          ),
-        if (item.posterUrl == null) Center(child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Text(item.title, textAlign: TextAlign.center, maxLines: 3, overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
-        )),
-        const DecoratedBox(decoration: BoxDecoration(gradient: LinearGradient(
-          begin: Alignment.topCenter, end: Alignment.bottomCenter,
-          colors: [Colors.transparent, Color(0xFF101114)], stops: [.7, 1]))),
-      ]),
-    );
-  }
+  @override Widget build(BuildContext context) => GestureDetector(
+    onTap: () => widget.onOpen(widget.item),
+    child: Stack(fit: StackFit.expand, children: [
+      const DecoratedBox(decoration: BoxDecoration(gradient: LinearGradient(
+        begin: Alignment.topLeft, end: Alignment.bottomRight, colors: [Color(0xFF16323A), Color(0xFF2A1F33)]))),
+      HeroImage(item: widget.item),
+      const DecoratedBox(decoration: BoxDecoration(gradient: LinearGradient(
+        begin: Alignment.topCenter, end: Alignment.bottomCenter,
+        colors: [Colors.transparent, Color(0xFF101114)], stops: [.78, 1]))),
+    ]),
+  );
 }
 
 class MiniCard extends StatefulWidget {
@@ -829,40 +921,44 @@ class _MiniCardState extends State<MiniCard> {
 
   @override Widget build(BuildContext context) {
     final item = widget.item;
-    final meta = [if (item.year != null) item.year.toString(), if (item.category != null) item.category!, if (item.category == null) item.type].join('  |  ');
-    return Container(
-      width: 300,
-      margin: const EdgeInsets.only(right: 12),
-      child: Material(
-        color: const Color(0xEE1D1F23),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-          side: BorderSide(color: widget.selected ? mint : Colors.transparent, width: 1.5),
-        ),
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: () => widget.onOpen(item),
-          child: Padding(padding: const EdgeInsets.all(10), child: Row(children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(8),
-              child: SizedBox(width: 50, height: 74, child: item.posterUrl == null
-                  ? const PosterFallback()
-                  : Image.network(item.posterUrl!, fit: BoxFit.cover, cacheWidth: 150, errorBuilder: (_, __, ___) => const PosterFallback())),
+    final meta = [if (item.year != null) item.year.toString(), item.category ?? item.type].join('  |  ');
+    return SizedBox(
+      width: 256,
+      child: Padding(
+        padding: const EdgeInsets.only(right: 12),
+        child: Stack(children: [
+          Positioned(left: 0, right: 0, bottom: 4, height: 52, child: Material(
+            color: const Color(0xFF24262B),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+              side: BorderSide(color: widget.selected ? mint : Colors.transparent, width: 1.2),
             ),
-            const SizedBox(width: 12),
-            Expanded(child: Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(item.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600)),
-              const SizedBox(height: 4),
-              Text(meta, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: muted, fontSize: 13)),
-            ])),
-            const SizedBox(width: 8),
-            Container(
-              width: 44, height: 44,
-              decoration: const BoxDecoration(color: mint, shape: BoxShape.circle),
-              child: const Icon(Icons.play_arrow, color: Colors.black, size: 28),
+            clipBehavior: Clip.antiAlias,
+            child: InkWell(
+              onTap: () => widget.onOpen(item),
+              child: Padding(padding: const EdgeInsets.only(left: 64, right: 10), child: Row(children: [
+                Expanded(child: Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(item.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500)),
+                  const SizedBox(height: 2),
+                  Text(meta, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: muted, fontSize: 11.5)),
+                ])),
+                const SizedBox(width: 8),
+                Container(
+                  width: 30, height: 30,
+                  decoration: const BoxDecoration(shape: BoxShape.circle, gradient: LinearGradient(colors: [blue, mint])),
+                  child: const Icon(Icons.play_arrow, color: Colors.black, size: 20),
+                ),
+              ])),
             ),
-          ])),
-        ),
+          )),
+          // the poster stands out above the card
+          Positioned(left: 8, bottom: 8, child: ClipRRect(
+            borderRadius: BorderRadius.circular(6),
+            child: SizedBox(width: 42, height: 62, child: item.posterUrl == null
+                ? const PosterFallback()
+                : Image.network(item.posterUrl!, fit: BoxFit.cover, cacheWidth: 150, errorBuilder: (_, __, ___) => const PosterFallback())),
+          )),
+        ]),
       ),
     );
   }

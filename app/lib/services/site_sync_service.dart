@@ -189,6 +189,9 @@ class SiteSyncService {
       final url = m['source_url']?.toString();
       final d = url == null ? null : _details[url];
       if (d != null) m.addAll(d);
+      final raw = (m['title'] ?? '').toString();
+      final tidy = raw.replaceFirst(RegExp(r'^(free\s+)?(download|watch)\s+', caseSensitive: false), '').trim();
+      if (tidy.isNotEmpty) m['title'] = tidy;
       if (url != null && (d != null || m['e'] == 1)) known.add(url);
       list.add(m);
     }
@@ -311,14 +314,10 @@ class SiteSyncService {
       }
     }
     for (final m in list) {
-      String? chosen;
-      for (final u in candidates(m)) {
-        if ((counts[u] ?? 0) <= 2) {
-          chosen = u;
-          break;
-        }
-      }
-      m['poster_url'] = chosen;
+      final usable = candidates(m).where((u) => (counts[u] ?? 0) <= 2).toList();
+      m['poster_url'] = usable.isEmpty ? null : usable.first;
+      // A second, different picture is used for the wide banner.
+      m['backdrop_url'] = usable.length > 1 ? usable[1] : null;
     }
   }
 
