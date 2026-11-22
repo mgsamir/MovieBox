@@ -295,9 +295,9 @@ class SiteSyncService {
           var done = 0;
           var chunks = 0;
           var ok = 0;
-          for (var i = 0; i < fresh.length; i += 8) {
+          for (var i = 0; i < fresh.length; i += 12) {
             if (DateTime.now().isAfter(deadline)) break;
-            final chunk = fresh.skip(i).take(8).toList();
+            final chunk = fresh.skip(i).take(12).toList();
             final results =
                 await Future.wait(chunk.map((e) => _readPage(client, e.url, label)));
             for (var j = 0; j < chunk.length; j++) {
@@ -313,7 +313,7 @@ class SiteSyncService {
             done += chunk.length;
             chunks++;
             progress.value = 'Reading titles... $done / ${fresh.length}';
-            if (chunks % 3 == 0) await _persist(prefs, items, skipped);
+            if (chunks % 2 == 0) await _persist(prefs, items, skipped);
           }
           pending = fresh.length - done;
           _log('Page details read: $ok of $done');
@@ -596,8 +596,14 @@ class SiteSyncService {
 
   Future<_Found?> _readPage(http.Client c, String url, String label) async {
     try {
-      final r = await _get(c, Uri.parse(url), seconds: 15);
-      if (r == null) {
+      // Only the first part of the page is needed (title, poster, description),
+      // so stop downloading after 150 KB to make this much faster.
+      final req = http.Request('GET', Uri.parse(url))
+        ..headers.addAll(const {'User-Agent': _ua, 'Accept': '*/*'});
+      http.StreamedResponse r;
+      try {
+        r = await c.send(req).timeout(const Duration(seconds: 15));
+      } catch (_) {
         _firstPageProblem ??= 'no response';
         return null;
       }
@@ -606,8 +612,12 @@ class SiteSyncService {
         return null;
       }
       if (!(r.headers['content-type']?.toLowerCase().contains('html') ?? false)) return null;
-      if (r.bodyBytes.length > 3 * 1024 * 1024) return null;
-      final doc = html_parser.parse(utf8.decode(r.bodyBytes, allowMalformed: true));
+      final bytes = <int>[];
+      await for (final chunk in r.stream.timeout(const Duration(seconds: 15))) {
+        bytes.addAll(chunk);
+        if (bytes.length >= 150 * 1024) break;
+      }
+      final doc = html_parser.parse(utf8.decode(bytes, allowMalformed: true));
       String? meta(String key) =>
           doc.querySelector('meta[property="$key"]')?.attributes['content'] ??
           doc.querySelector('meta[name="$key"]')?.attributes['content'];

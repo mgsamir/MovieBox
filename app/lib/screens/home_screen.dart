@@ -270,7 +270,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         borderRadius: BorderRadius.circular(8),
         child: SizedBox(width: 140, child: item.posterUrl == null
             ? const PosterFallback()
-            : Image.network(item.posterUrl!, fit: BoxFit.cover, errorBuilder: (_, __, ___) => const PosterFallback())),
+            : Image.network(
+                item.posterUrl!,
+                fit: BoxFit.cover,
+                cacheWidth: 300,
+                loadingBuilder: (_, child, progress) => progress == null ? child : const PosterFallback(),
+                errorBuilder: (_, __, ___) => const PosterFallback())),
       )),
       const SizedBox(height: 5),
       Text(item.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12)),
@@ -330,7 +335,12 @@ class PosterCard extends StatelessWidget {
   @override Widget build(BuildContext context) => InkWell(onTap: onTap, borderRadius: BorderRadius.circular(12), child: SizedBox(width: 124, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
     Expanded(child: ClipRRect(borderRadius: BorderRadius.circular(12), child: SizedBox(width: 124, child: item.posterUrl == null
         ? const PosterFallback()
-        : Image.network(item.posterUrl!, fit: BoxFit.cover, errorBuilder: (_, __, ___) => const PosterFallback())))),
+        : Image.network(
+            item.posterUrl!,
+            fit: BoxFit.cover,
+            cacheWidth: 300,
+            loadingBuilder: (_, child, progress) => progress == null ? child : const PosterFallback(),
+            errorBuilder: (_, __, ___) => const PosterFallback())))),
     const SizedBox(height: 7),
     Text(item.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12)),
     Text([if (item.year != null) item.year.toString(), item.type].join(' • '), maxLines: 1, style: const TextStyle(color: muted, fontSize: 10)),
