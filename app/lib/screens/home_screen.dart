@@ -364,11 +364,21 @@ class PosterFallback extends StatelessWidget {
   @override Widget build(BuildContext context) => Container(color: const Color(0xFF27292E), child: const Center(child: Icon(Icons.movie_outlined, size: 34, color: Colors.white38)));
 }
 
-class PosterCard extends StatelessWidget {
+class PosterCard extends StatefulWidget {
   final ContentItem item;
   final VoidCallback onTap;
   const PosterCard({super.key, required this.item, required this.onTap});
-  @override Widget build(BuildContext context) => InkWell(onTap: onTap, borderRadius: BorderRadius.circular(12), child: SizedBox(width: 124, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+  @override State<PosterCard> createState() => _PosterCardState();
+}
+
+class _PosterCardState extends State<PosterCard> {
+  String? get _siteUrl => widget.item.source == siteSourceName ? widget.item.sourceUrl : null;
+  // Details of a website title are downloaded only while its card is on screen.
+  @override void initState() { super.initState(); SiteSyncService.instance.requestDetails(_siteUrl); }
+  @override void dispose() { SiteSyncService.instance.cancelDetails(_siteUrl); super.dispose(); }
+  @override Widget build(BuildContext context) {
+    final item = widget.item;
+    return InkWell(onTap: widget.onTap, borderRadius: BorderRadius.circular(12), child: SizedBox(width: 124, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
     Expanded(child: ClipRRect(borderRadius: BorderRadius.circular(12), child: SizedBox(width: 124, child: item.posterUrl == null
         ? const PosterFallback()
         : Image.network(
@@ -381,6 +391,7 @@ class PosterCard extends StatelessWidget {
     Text(item.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12)),
     Text([if (item.year != null) item.year.toString(), item.type].join(' • '), maxLines: 1, style: const TextStyle(color: muted, fontSize: 10)),
   ])));
+  }
 }
 
 class GradientSwitch extends StatelessWidget {

@@ -46,14 +46,13 @@ class _SiteSyncScreenState extends State<SiteSyncScreen> {
     final l = await svc.lastLog();
     final c = await svc.cachedCount();
     final ls = await svc.lastSync();
-    final p = await svc.pending();
     final u = await svc.savedUrl();
     if (!mounted) return;
     setState(() {
       log = l;
       count = c;
       last = ls;
-      pending = p;
+      pending = svc.knownCount;
       configured = u != null;
     });
   }
@@ -92,7 +91,7 @@ class _SiteSyncScreenState extends State<SiteSyncScreen> {
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             _line('Website', configured ? 'Connected' : 'Not set up'),
             _line('Titles saved', '$count'),
-            _line('Details still to read', '$pending'),
+            _line('Details loaded (as you scroll)', '$pending'),
             _line('Last sync', _lastText()),
             if (running) ...[
               const SizedBox(height: 10),

@@ -59,7 +59,7 @@ class SiteSyncService {
 
   static const _activeKey = 'moviebox.site_active';
   static const _schemaKey = 'moviebox.site_schema';
-  static const _schema = 2;
+  static const _schema = 3;
   static const _urlKey = 'moviebox.site_url';
   static const _itemsKey = 'moviebox.site_items';
   static const _skippedKey = 'moviebox.site_skipped';
@@ -86,9 +86,13 @@ class SiteSyncService {
   /// Forget everything that was saved from the website (used by Reset).
   Future<void> clearCache() async {
     final prefs = await SharedPreferences.getInstance();
-    for (final key in [_itemsKey, _skippedKey, _lastKey, _pendingKey, _activeKey, _logKey]) {
+    for (final key in [_itemsKey, _skippedKey, _lastKey, _pendingKey, _activeKey, _logKey, _detailsKey]) {
       await prefs.remove(key);
     }
+    _baseItems = null;
+    _details = {};
+    _known = {};
+    _fails.clear();
     revision.value++;
   }
 
@@ -148,12 +152,124 @@ class SiteSyncService {
   Future<int> pending() async =>
       (await SharedPreferences.getInstance()).getInt(_pendingKey) ?? 0;
 
+  List<Map<String, dynamic>>? _baseItems; // decoded once, reset after every save
+
   Future<List<ContentItem>> cachedItems() async {
     final prefs = await SharedPreferences.getInstance();
-    final list = _decode(prefs.getString(_itemsKey)).values.toList()
-      ..sort((a, b) => ((b['sort'] as num?) ?? 0).compareTo((a['sort'] as num?) ?? 0));
+    await _loadDetails(prefs);
+    final base = _baseItems ??= (_decode(prefs.getString(_itemsKey)).values.toList()
+      ..sort((a, b) => ((b['sort'] as num?) ?? 0).compareTo((a['sort'] as num?) ?? 0)));
+    final list = <Map<String, dynamic>>[];
+    final known = <String>{};
+    for (final b in base) {
+      final m = Map<String, dynamic>.from(b);
+      final url = m['source_url']?.toString();
+      final d = url == null ? null : _details[url];
+      if (d != null) m.addAll(d);
+      if (url != null && (d != null || m['e'] == 1)) known.add(url);
+      list.add(m);
+    }
+    _known = known;
     _dropSharedPosters(list);
     return list.map((m) => ContentItem.fromMap(m)).toList(growable: false);
+  }
+
+  // ------------------------------------------------- details, on demand only
+  // A title's page is downloaded only when its card is on screen, then the
+  // result is saved on the phone and never downloaded again.
+  static const _detailsKey = 'moviebox.site_details';
+  Map<String, Map<String, dynamic>> _details = {};
+  bool _detailsLoaded = false;
+  Set<String> _known = {};
+  final List<String> _queue = [];
+  final Set<String> _inFlight = {};
+  final Map<String, int> _fails = {};
+  Timer? _pumpTimer, _flushTimer;
+  http.Client? _detailClient;
+  String _label = '';
+
+  /// How many titles already have their details saved.
+  int get knownCount => _known.length;
+
+  Future<void> _loadDetails(SharedPreferences prefs) async {
+    if (_detailsLoaded) return;
+    _detailsLoaded = true;
+    try {
+      final raw = prefs.getString(_detailsKey);
+      if (raw != null) {
+        final decoded = jsonDecode(raw);
+        if (decoded is Map) {
+          decoded.forEach((k, v) {
+            final m = _map(v);
+            if (m != null) _details[k.toString()] = m;
+          });
+        }
+      }
+    } catch (_) {}
+  }
+
+  void requestDetails(String? url) {
+    if (url == null || _known.contains(url) || _details.containsKey(url)) return;
+    if ((_fails[url] ?? 0) >= 2 || _inFlight.contains(url) || _queue.contains(url)) return;
+    _queue.add(url);
+    // Short delay so cards that are scrolled past quickly never download.
+    _pumpTimer ??= Timer(const Duration(milliseconds: 350), () {
+      _pumpTimer = null;
+      _pump();
+    });
+  }
+
+  void cancelDetails(String? url) {
+    if (url != null) _queue.remove(url);
+  }
+
+  void _pump() {
+    while (_inFlight.length < 4 && _queue.isNotEmpty) {
+      final url = _queue.removeLast(); // the card shown most recently first
+      _inFlight.add(url);
+      _loadOne(url);
+    }
+  }
+
+  Future<void> _loadOne(String url) async {
+    try {
+      if (_label.isEmpty) {
+        final prefs = await SharedPreferences.getInstance();
+        final base = normalize(_configured(prefs) ?? '');
+        if (base != null) _label = _hostLabel(base);
+      }
+      final f = await _readPage(_detailClient ??= http.Client(), url, _label);
+      if (f == null) {
+        _fails[url] = (_fails[url] ?? 0) + 1;
+      } else {
+        _details[url] = <String, dynamic>{
+          'title': f.title,
+          'content_type': _guessType(f.title),
+          'release_year': _guessYear(f.title),
+          if (RegExp('hindi', caseSensitive: false).hasMatch(f.title)) 'language': 'Hindi',
+          if (f.poster != null) 'poster_url': f.poster,
+          if (f.images.isNotEmpty) 'imgs': f.images,
+          if (f.synopsis != null) 'synopsis': f.synopsis,
+          if (f.video != null) 'video_url': f.video,
+        };
+        _known.add(url);
+        _flushTimer ??= Timer(const Duration(seconds: 2), _flushDetails);
+      }
+    } catch (_) {
+      _fails[url] = (_fails[url] ?? 0) + 1;
+    } finally {
+      _inFlight.remove(url);
+      _pump();
+    }
+  }
+
+  Future<void> _flushDetails() async {
+    _flushTimer = null;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_detailsKey, jsonEncode(_details));
+    } catch (_) {}
+    revision.value++;
   }
 
   /// An image repeated across many titles (logo, badge, placeholder) is not a
@@ -212,9 +328,12 @@ class SiteSyncService {
       if (prefs.getString(_activeKey) != base.toString() ||
           prefs.getInt(_schemaKey) != _schema) {
         await prefs.setInt(_schemaKey, _schema);
-        for (final key in [_itemsKey, _skippedKey, _lastKey, _pendingKey]) {
+        for (final key in [_itemsKey, _skippedKey, _lastKey, _pendingKey, _detailsKey]) {
           await prefs.remove(key);
         }
+        _baseItems = null;
+        _details = {};
+        _known = {};
         await prefs.setString(_activeKey, base.toString());
       }
       final items = _decode(prefs.getString(_itemsKey));
@@ -239,6 +358,7 @@ class SiteSyncService {
           'title': f.title,
           'content_type': _guessType(f.title),
           'synopsis': f.synopsis,
+          'e': 1,
           'poster_url': f.poster,
           'video_url': f.video,
           'language': RegExp('hindi', caseSensitive: false).hasMatch(f.title) ? 'Hindi' : null,
@@ -270,7 +390,6 @@ class SiteSyncService {
               'id': 'site-${_fnv(e.url)}',
               'title': title,
               'content_type': _guessType(title),
-              'poster_url': e.images.isEmpty ? null : e.images.first,
               'imgs': e.images,
               'language': RegExp('hindi', caseSensitive: false).hasMatch(title) ? 'Hindi' : null,
               'source': siteSourceName,
@@ -283,39 +402,8 @@ class SiteSyncService {
           // Titles are visible immediately; details are filled in below.
           await _persist(prefs, items, skipped);
 
-          final fresh = entries.where((e) {
-            final it = items[e.url];
-            return it != null && it['e'] != 1 && ((it['t'] as num?) ?? 0) < 3;
-          }).toList()
-            ..sort((a, b) => ((items[b.url]!['sort'] as num?) ?? 0)
-                .compareTo((items[a.url]!['sort'] as num?) ?? 0));
-          final deadline = DateTime.now().add(const Duration(seconds: 300));
-          var done = 0;
-          var chunks = 0;
-          var ok = 0;
-          for (var i = 0; i < fresh.length; i += 12) {
-            if (DateTime.now().isAfter(deadline)) break;
-            final chunk = fresh.skip(i).take(12).toList();
-            final results =
-                await Future.wait(chunk.map((e) => _readPage(client, e.url, label)));
-            for (var j = 0; j < chunk.length; j++) {
-              final it = items[chunk[j].url]!;
-              final r = results[j];
-              if (r == null) {
-                it['t'] = ((it['t'] as num?) ?? 0).toInt() + 1;
-              } else {
-                _enrich(it, r);
-                ok++;
-              }
-            }
-            done += chunk.length;
-            chunks++;
-            progress.value = 'Reading titles... $done / ${fresh.length}';
-            if (chunks % 2 == 0) await _persist(prefs, items, skipped);
-          }
-          pending = fresh.length - done;
-          _log('Page details read: $ok of $done');
-          if (_firstPageProblem != null) _log('First page problem: $_firstPageProblem');
+          pending = 0;
+          _log('Details (poster, description) load only when a title is on screen');
         }
       }
 
@@ -547,7 +635,7 @@ class SiteSyncService {
           final images = <String>[];
           for (final im in imgRe.allMatches(block)) {
             final u = _https(im.group(1)?.replaceAll('&amp;', '&'));
-            if (u != null && !images.contains(u) && images.length < 4) images.add(u);
+            if (u != null && !images.contains(u) && images.length < 2) images.add(u);
           }
           out[parsed.toString()] = _SmEntry(parsed.toString(),
               images: images,
@@ -759,8 +847,9 @@ class SiteSyncService {
       Map<String, Map<String, dynamic>> items, Set<String> skipped) async {
     final list = items.values.toList()
       ..sort((a, b) => ((b['sort'] as num?) ?? 0).compareTo((a['sort'] as num?) ?? 0));
-    await prefs.setString(_itemsKey, jsonEncode(list.take(3000).toList()));
+    await prefs.setString(_itemsKey, jsonEncode(list.take(20000).toList()));
     await prefs.setStringList(_skippedKey, skipped.take(5000).toList());
+    _baseItems = null;
     revision.value++;
   }
 
