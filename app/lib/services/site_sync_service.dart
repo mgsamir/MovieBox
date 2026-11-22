@@ -26,9 +26,9 @@ class SiteSyncResult {
 
 class _SmEntry {
   final String url;
-  final String? image;
+  final List<String> images;
   final DateTime? lastmod;
-  const _SmEntry(this.url, {this.image, this.lastmod});
+  const _SmEntry(this.url, {this.images = const [], this.lastmod});
 }
 
 class _Found {
@@ -36,8 +36,9 @@ class _Found {
   final String title;
   final String? poster, synopsis, video;
   final DateTime? date;
+  final List<String> images;
   const _Found(this.url, this.title,
-      {this.poster, this.synopsis, this.video, this.date});
+      {this.poster, this.synopsis, this.video, this.date, this.images = const []});
 }
 
 /// Syncs the catalogue of a website the user owns, entirely on the device.
@@ -57,6 +58,8 @@ class SiteSyncService {
   static bool get hasBuiltInUrl => _envUrl.trim().isNotEmpty;
 
   static const _activeKey = 'moviebox.site_active';
+  static const _schemaKey = 'moviebox.site_schema';
+  static const _schema = 2;
   static const _urlKey = 'moviebox.site_url';
   static const _itemsKey = 'moviebox.site_items';
   static const _skippedKey = 'moviebox.site_skipped';
@@ -149,7 +152,34 @@ class SiteSyncService {
     final prefs = await SharedPreferences.getInstance();
     final list = _decode(prefs.getString(_itemsKey)).values.toList()
       ..sort((a, b) => ((b['sort'] as num?) ?? 0).compareTo((a['sort'] as num?) ?? 0));
+    _dropSharedPosters(list);
     return list.map((m) => ContentItem.fromMap(m)).toList(growable: false);
+  }
+
+  /// An image repeated across many titles (logo, badge, placeholder) is not a
+  /// real poster, so each title uses its first image that is not shared.
+  void _dropSharedPosters(List<Map<String, dynamic>> list) {
+    if (list.length < 6) return;
+    List<String> candidates(Map<String, dynamic> m) => <String>{
+          if (m['poster_url'] is String) m['poster_url'] as String,
+          ...((m['imgs'] as List?)?.whereType<String>() ?? const <String>[]),
+        }.toList();
+    final counts = <String, int>{};
+    for (final m in list) {
+      for (final u in candidates(m)) {
+        counts[u] = (counts[u] ?? 0) + 1;
+      }
+    }
+    for (final m in list) {
+      String? chosen;
+      for (final u in candidates(m)) {
+        if ((counts[u] ?? 0) <= 2) {
+          chosen = u;
+          break;
+        }
+      }
+      m['poster_url'] = chosen;
+    }
   }
 
   /// Auto sync when a website is configured and it has not synced for 3 hours,
@@ -181,7 +211,9 @@ class SiteSyncService {
             : 'The website address must be a valid https:// link.');
       }
       // A different website than last time: start from a clean cache.
-      if (prefs.getString(_activeKey) != base.toString()) {
+      if (prefs.getString(_activeKey) != base.toString() ||
+          prefs.getInt(_schemaKey) != _schema) {
+        await prefs.setInt(_schemaKey, _schema);
         for (final key in [_itemsKey, _skippedKey, _lastKey, _pendingKey]) {
           await prefs.remove(key);
         }
@@ -240,7 +272,8 @@ class SiteSyncService {
               'id': 'site-${_fnv(e.url)}',
               'title': title,
               'content_type': _guessType(title),
-              'poster_url': _https(e.image),
+              'poster_url': e.images.isEmpty ? null : e.images.first,
+              'imgs': e.images,
               'language': RegExp('hindi', caseSensitive: false).hasMatch(title) ? 'Hindi' : null,
               'source': siteSourceName,
               'source_url': e.url,
@@ -513,9 +546,13 @@ class SiteSyncService {
           final https = _https(loc.replaceAll('&amp;', '&'));
           final parsed = https == null ? null : Uri.tryParse(https);
           if (parsed == null || !_looksLikeContent(parsed, origin)) continue;
-          final img = imgRe.firstMatch(block)?.group(1)?.replaceAll('&amp;', '&');
+          final images = <String>[];
+          for (final im in imgRe.allMatches(block)) {
+            final u = _https(im.group(1)?.replaceAll('&amp;', '&'));
+            if (u != null && !images.contains(u) && images.length < 4) images.add(u);
+          }
           out[parsed.toString()] = _SmEntry(parsed.toString(),
-              image: _https(img),
+              images: images,
               lastmod: DateTime.tryParse(modRe.firstMatch(block)?.group(1) ?? ''));
           pages++;
         }
@@ -550,6 +587,7 @@ class SiteSyncService {
     it['release_year'] = _guessYear(f.title);
     if (RegExp('hindi', caseSensitive: false).hasMatch(f.title)) it['language'] = 'Hindi';
     if (f.poster != null) it['poster_url'] = f.poster;
+    if (f.images.isNotEmpty) it['imgs'] = f.images;
     if (f.synopsis != null) it['synopsis'] = f.synopsis;
     if (f.video != null) it['video_url'] = f.video;
     if (f.date != null) it['sort'] = f.date!.millisecondsSinceEpoch;
@@ -578,8 +616,27 @@ class SiteSyncService {
       title = _cleanTitle(title, label);
       if (title.isEmpty) return null;
       final pageUri = Uri.parse(url);
-      final posterRaw = meta('og:image') ?? meta('twitter:image');
-      final poster = posterRaw == null ? null : _https(pageUri.resolve(posterRaw).toString());
+      final images = <String>[];
+      void addImage(String? raw) {
+        if (raw == null || images.length >= 5) return;
+        final trimmed = raw.trim();
+        if (trimmed.isEmpty || trimmed.startsWith('data:')) return;
+        final u = _https(pageUri.resolve(trimmed).toString());
+        if (u == null) return;
+        final bare = u.toLowerCase().split('?').first;
+        if (bare.endsWith('.svg') || bare.endsWith('.ico')) return;
+        if (!images.contains(u)) images.add(u);
+      }
+      addImage(meta('og:image'));
+      addImage(meta('twitter:image'));
+      addImage(doc.querySelector('link[rel="image_src"]')?.attributes['href']);
+      for (final img in doc.querySelectorAll('img')) {
+        if (images.length >= 5) break;
+        addImage(img.attributes['data-src'] ??
+            img.attributes['data-lazy-src'] ??
+            img.attributes['src']);
+      }
+      final poster = images.isEmpty ? null : images.first;
       if ((meta('og:type') ?? '').toLowerCase() == 'website' && poster == null) {
         return null;
       }
@@ -588,6 +645,7 @@ class SiteSyncService {
       final video = videoRaw == null ? null : _https(pageUri.resolve(videoRaw).toString());
       return _Found(url, title,
           poster: poster,
+          images: images,
           synopsis: desc.isEmpty ? null : _shorten(desc),
           video: video,
           date: DateTime.tryParse(meta('article:published_time') ?? ''));
