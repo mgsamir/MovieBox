@@ -52,14 +52,14 @@ String? _stringValue(dynamic value) {
   if (value == null) return null;
   final text = value.toString().trim();
   return text.isEmpty ? null : text;
+}
 
-  static List<String> _genreList(Object? raw) {
-    if (raw is List) {
-      return raw.map((e) => e.toString().trim()).where((e) => e.isNotEmpty).toList(growable: false);
-    }
-    if (raw is String && raw.trim().isNotEmpty) {
-      return raw.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList(growable: false);
-    }
-    return const [];
+List<String> _genreList(Object? raw) {
+  if (raw is List) {
+    return raw.map((e) => e.toString().trim()).where((e) => e.isNotEmpty).toList(growable: false);
   }
+  if (raw is String && raw.trim().isNotEmpty) {
+    return raw.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList(growable: false);
+  }
+  return const [];
 }
