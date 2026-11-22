@@ -32,8 +32,8 @@ class _HomeScreenState extends State<HomeScreen> {
   List<ContentItem> siteItems = [];
   String? fGenre;
   int? fYear;
-  int mode = 0; // 0 Home, 1 Movie, 2 TV/Series, 3 Anime
-  static const _modes = ['Trending', 'Movie', 'TV/Series', 'Anime'];
+  int mode = 0; // index into _modes (0 = Trending: banner + newest titles)
+  static const _modes = ['Trending', 'Bollywood', 'Hollywood', 'TV/Series', 'Anime', '4K & UHD'];
   bool syncing = false;
   final catalogNotifier = ValueNotifier<List<ContentItem>>([]);
   final Set<String> saved = {};
@@ -277,10 +277,16 @@ class _HomeScreenState extends State<HomeScreen> {
 
   bool _isAnime(ContentItem e) => e.type.toLowerCase() == 'anime' || e.category == 'Anime';
   List<ContentItem> modeItems() {
-    switch (mode) {
-      case 1: return all.where((e) => !_isAnime(e) && e.type.toLowerCase() == 'movie').toList();
-      case 2: return all.where((e) => !_isAnime(e) && e.type.toLowerCase() == 'series').toList();
-      default: return all.where(_isAnime).toList();
+    switch (_modes[mode]) {
+      case 'Bollywood':
+      case 'Hollywood':
+      case '4K & UHD':
+        // Each of these is one website of the family.
+        return all.where((e) => e.category == _modes[mode]).toList();
+      case 'TV/Series':
+        return all.where((e) => !_isAnime(e) && e.type.toLowerCase() == 'series').toList();
+      default:
+        return all.where(_isAnime).toList();
     }
   }
 
@@ -596,17 +602,13 @@ class SearchScreen extends StatefulWidget {
 }
 class _SearchScreenState extends State<SearchScreen> {
   String query = '';
-  String? cat; // website category, null = All
 
   List<ContentItem> filter(List<ContentItem> all) {
     final q = query.trim().toLowerCase();
-    return all.where((e) =>
-        (cat == null || e.category == cat) &&
-        (q.isEmpty || e.title.toLowerCase().contains(q))).toList();
+    return all.where((e) => e.title.toLowerCase().contains(q)).toList();
   }
 
   @override Widget build(BuildContext context) {
-    final labels = SiteSyncHub.active.map((s) => s.source.label).toList();
     return Scaffold(
       backgroundColor: bg,
       appBar: AppBar(
@@ -626,34 +628,10 @@ class _SearchScreenState extends State<SearchScreen> {
         actions: const [SizedBox(width: 12)],
       ),
       body: Column(children: [
-        if (labels.length > 1) SizedBox(height: 46, child: ListView(
-          scrollDirection: Axis.horizontal,
-          padding: const EdgeInsets.symmetric(horizontal: 10),
-          children: [
-            for (final label in <String?>[null, ...labels])
-              InkWell(
-                onTap: () => setState(() => cat = label),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 14),
-                  child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                    Text(label ?? 'All', style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: cat == label ? FontWeight.w800 : FontWeight.w400,
-                      color: cat == label ? Colors.white : const Color(0xA6FFFFFF),
-                    )),
-                    const SizedBox(height: 5),
-                    Container(width: 22, height: 3, decoration: BoxDecoration(
-                      color: cat == label ? mint : Colors.transparent,
-                      borderRadius: BorderRadius.circular(2),
-                    )),
-                  ]),
-                ),
-              ),
-          ],
-        )),
         Expanded(child: ValueListenableBuilder<List<ContentItem>>(
           valueListenable: widget.catalog,
           builder: (_, all, __) {
+            if (query.trim().isEmpty) return const SizedBox.shrink();
             final results = filter(all);
             if (results.isEmpty) return const Center(child: Text('No titles found', style: TextStyle(color: muted)));
             return GridView.builder(
