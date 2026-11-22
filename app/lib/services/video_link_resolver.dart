@@ -19,7 +19,7 @@ class ResolvedVideoSource {
     final extension = dot < 0 ? '' : segment.substring(dot + 1).toLowerCase();
     return !isHls &&
         (contentType.toLowerCase().startsWith('video/') ||
-            const {'mp4', 'm4v', 'mov', 'webm'}.contains(extension));
+            const {'mp4', 'm4v', 'mov', 'webm', 'mkv'}.contains(extension));
   }
 }
 
@@ -27,13 +27,17 @@ class VideoLinkResolver {
   VideoLinkResolver._();
 
   static const _mediaExtensions = {
-    'mp4', 'm4v', 'mov', 'webm', 'm3u8'
+    'mp4', 'm4v', 'mov', 'webm', 'mkv', 'm3u8'
   };
   static final http.Client _client = http.Client();
 
-  static Future<ResolvedVideoSource> resolve(String rawUrl) => _resolve(rawUrl, 0, null);
+  /// With [forDownload] only real files are returned (streams such as .m3u8
+  /// are skipped), and the site's own "download" pages are followed one level.
+  static Future<ResolvedVideoSource> resolve(String rawUrl, {bool forDownload = false}) =>
+      _resolve(rawUrl, 0, null, forDownload);
 
-  static Future<ResolvedVideoSource> _resolve(String rawUrl, int depth, Uri? referer) async {
+  static Future<ResolvedVideoSource> _resolve(
+      String rawUrl, int depth, Uri? referer, bool forDownload) async {
     final pageUri = Uri.tryParse(rawUrl.trim());
     if (pageUri == null ||
         pageUri.scheme != 'https' ||
@@ -43,7 +47,7 @@ class VideoLinkResolver {
     }
 
     final extension = _extension(pageUri);
-    if (_mediaExtensions.contains(extension)) {
+    if (_mediaExtensions.contains(extension) && !(forDownload && extension == 'm3u8')) {
       return ResolvedVideoSource(
         uri: pageUri,
         contentType: extension == 'm3u8'
@@ -111,6 +115,14 @@ class VideoLinkResolver {
       if (src != null && src.trim().isNotEmpty) candidates.add(src.trim());
     }
 
+    // Plain links to a video file (for example a "Download" button).
+    for (final a in document.querySelectorAll('a[href]')) {
+      final href = a.attributes['href']?.trim();
+      if (href == null || href.isEmpty || href.startsWith('#') || href.startsWith('javascript:')) continue;
+      final ext = _extension(pageUri.resolve(href));
+      if (_mediaExtensions.contains(ext)) candidates.add(href);
+    }
+
     // JSON-LD can expose a publisher's actual media URL as contentUrl.
     for (final script in document.querySelectorAll('script[type="application/ld+json"]')) {
       final raw = script.text.trim();
@@ -129,6 +141,7 @@ class VideoLinkResolver {
       }
       final ext = _extension(uri);
       if (_mediaExtensions.contains(ext)) {
+        if (forDownload && ext == 'm3u8') continue;
         return ResolvedVideoSource(
           uri: uri,
           contentType: ext == 'm3u8'
@@ -155,20 +168,35 @@ class VideoLinkResolver {
     }
 
     // Many players keep the file address inside inline scripts or JSON.
-    final inScript = _findMediaInText(response.body);
+    final inScript = _findMediaInText(response.body, forDownload);
     if (inScript != null) return inScript;
 
-    // One level of embedded players (iframes), opened like a normal browser would.
+    // One level deeper: embedded players (iframes) and, for downloads, the
+    // site's own "download" pages. Opened like a normal browser would.
     if (depth == 0) {
-      var tried = 0;
+      final frames = <String>[];
       for (final frame in document.querySelectorAll('iframe[src], iframe[data-src]')) {
         final src = (frame.attributes['src'] ?? frame.attributes['data-src'] ?? '').trim();
         if (src.isEmpty || src.startsWith('about:') || src.startsWith('javascript:')) continue;
-        if (tried++ >= 3) break;
+        frames.add(pageUri.resolve(src).toString());
+      }
+      final downloads = <String>[];
+      for (final a in document.querySelectorAll('a[href]')) {
+        final href = a.attributes['href']?.trim() ?? '';
+        if (href.isEmpty || href.startsWith('#') || href.startsWith('javascript:')) continue;
+        if (!(a.text.toLowerCase().contains('download') || href.toLowerCase().contains('download'))) continue;
+        final target = pageUri.resolve(href);
+        if (target.scheme != 'https' || target.host != pageUri.host || target == pageUri) continue;
+        if (!downloads.contains(target.toString())) downloads.add(target.toString());
+      }
+      final follow = forDownload ? [...downloads, ...frames] : [...frames, ...downloads];
+      var tried = 0;
+      for (final next in follow) {
+        if (tried++ >= 4) break;
         try {
-          return await _resolve(pageUri.resolve(src).toString(), 1, pageUri);
+          return await _resolve(next, 1, pageUri, forDownload);
         } catch (_) {
-          // Try the next embedded player.
+          // Try the next one.
         }
       }
     }
@@ -178,13 +206,13 @@ class VideoLinkResolver {
     );
   }
 
-  static ResolvedVideoSource? _findMediaInText(String text) {
+  static ResolvedVideoSource? _findMediaInText(String text, bool forDownload) {
     final cleaned = text
         .replaceAll(r'\/', '/')
         .replaceAll(r'\u0026', '&')
         .replaceAll('&amp;', '&');
     final re = RegExp(
-        r'''https?://[^"'\s<>\\]+?\.(?:mp4|m3u8|webm|m4v)(?:\?[^"'\s<>\\]*)?''',
+        r'''https?://[^"'\s<>\\]+?\.(?:mp4|m3u8|webm|m4v|mkv)(?:\?[^"'\s<>\\]*)?''',
         caseSensitive: false);
     for (final m in re.allMatches(cleaned)) {
       var url = m.group(0)!;
@@ -193,6 +221,7 @@ class VideoLinkResolver {
       if (uri == null || uri.host.isEmpty || uri.userInfo.isNotEmpty) continue;
       final ext = _extension(uri);
       if (!_mediaExtensions.contains(ext)) continue;
+      if (forDownload && ext == 'm3u8') continue;
       return ResolvedVideoSource(
         uri: uri,
         contentType: ext == 'm3u8' ? 'application/vnd.apple.mpegurl' : 'video/$ext',
