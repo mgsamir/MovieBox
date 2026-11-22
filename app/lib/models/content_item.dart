@@ -9,6 +9,7 @@ class ContentItem {
   final String? language;
   final String? source;
   final String? sourceUrl;
+  final String? category;
   final int? year;
   final double? rating;
 
@@ -23,6 +24,7 @@ class ContentItem {
         language = _stringValue(map['language']),
         source = _stringValue(map['source']),
         sourceUrl = _stringValue(map['source_url']),
+        category = _stringValue(map['category']),
         year = int.tryParse(map['release_year']?.toString() ?? ''),
         rating = double.tryParse(map['rating']?.toString() ?? '');
 
@@ -37,6 +39,7 @@ class ContentItem {
         'language': language,
         'source': source,
         'source_url': sourceUrl,
+        'category': category,
         'release_year': year,
         'rating': rating,
       };

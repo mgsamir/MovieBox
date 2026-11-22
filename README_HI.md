@@ -51,3 +51,5 @@ Put the second command's complete output in `ANDROID_KEYSTORE_BASE64`, and use t
 ## Own website sync (on device)
 
 Add a GitHub Actions secret named `SITE_URL` (your website's https address). The build passes it to the app, which then syncs your website's titles by itself: when the app opens, when it returns to the foreground, and on pull-to-refresh (every 3 hours at most). The address is never shown in the app. The app detects a WordPress API, sitemap, RSS feed or poster page automatically. Title detail pages have Watch and Download buttons; if no direct video is found, the in-app browser finder opens.
+
+Several websites can be added, one per category. Create these Actions secrets (all optional): `SITE_URL` (Hollywood), `SITE_URL_4K` (4K & UHD), `SITE_URL_BOLLYWOOD` (Bollywood), `SITE_URL_ANIME` (Anime). Each one shows up in the app as its own row and filter chip. Only add websites whose content you are authorized to use.

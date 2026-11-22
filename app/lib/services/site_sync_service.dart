@@ -11,6 +11,22 @@ import '../models/content_item.dart';
 /// Value of ContentItem.source for titles that come from the user's own website.
 const siteSourceName = 'My Website';
 
+/// One website (for example one family member's site) and its category name.
+/// The address comes from a GitHub Actions secret at build time and is never
+/// shown in the app.
+class SiteSource {
+  final String id, label, envUrl;
+  const SiteSource(this.id, this.label, this.envUrl);
+  bool get configured => envUrl.trim().isNotEmpty;
+}
+
+const siteSources = <SiteSource>[
+  SiteSource('4k', '4K & UHD', String.fromEnvironment('SITE_URL_4K')),
+  SiteSource('bollywood', 'Bollywood', String.fromEnvironment('SITE_URL_BOLLYWOOD')),
+  SiteSource('anime', 'Anime', String.fromEnvironment('SITE_URL_ANIME')),
+  SiteSource('hollywood', 'Hollywood', String.fromEnvironment('SITE_URL')),
+];
+
 class SiteSyncResult {
   final int total, added, pending;
   final String method;
@@ -49,29 +65,29 @@ class _Found {
 /// links are stored; the playable video is resolved when the user taps Watch or
 /// Download.
 class SiteSyncService {
-  SiteSyncService._();
-  static final SiteSyncService instance = SiteSyncService._();
+  final SiteSource source;
+  SiteSyncService._(this.source);
 
   /// Website address injected at build time from the SITE_URL GitHub secret.
   /// It is never shown in the UI.
-  static const _envUrl = String.fromEnvironment('SITE_URL');
-  static bool get hasBuiltInUrl => _envUrl.trim().isNotEmpty;
+  String get _envUrl => source.envUrl;
+  bool get hasBuiltInUrl => source.configured;
 
-  static const _activeKey = 'moviebox.site_active';
-  static const _schemaKey = 'moviebox.site_schema';
-  static const _schema = 3;
-  static const _urlKey = 'moviebox.site_url';
-  static const _itemsKey = 'moviebox.site_items';
-  static const _skippedKey = 'moviebox.site_skipped';
-  static const _lastKey = 'moviebox.site_last_sync';
-  static const _pendingKey = 'moviebox.site_pending';
+  String get _activeKey => 'moviebox.site_active.${source.id}';
+  String get _schemaKey => 'moviebox.site_schema.${source.id}';
+  static const _schema = 4;
+  String get _urlKey => 'moviebox.site_url.${source.id}';
+  String get _itemsKey => 'moviebox.site_items.${source.id}';
+  String get _skippedKey => 'moviebox.site_skipped.${source.id}';
+  String get _lastKey => 'moviebox.site_last_sync.${source.id}';
+  String get _pendingKey => 'moviebox.site_pending.${source.id}';
   static const _ua =
       'Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 Chrome/130 Mobile Safari/537.36';
 
-  static const _logKey = 'moviebox.site_log';
+  String get _logKey => 'moviebox.site_log.${source.id}';
 
   /// Increases whenever new titles were saved, so screens can refresh.
-  final ValueNotifier<int> revision = ValueNotifier<int>(0);
+  static final ValueNotifier<int> revision = ValueNotifier<int>(0);
   final List<String> _logLines = [];
   String? _firstPageProblem;
   void _log(String line) {
@@ -97,7 +113,7 @@ class SiteSyncService {
   }
 
   /// Human readable progress while a sync is running (null when idle).
-  final ValueNotifier<String?> progress = ValueNotifier<String?>(null);
+  static final ValueNotifier<String?> progress = ValueNotifier<String?>(null);
   bool _running = false;
   bool get isRunning => _running;
 
@@ -177,7 +193,7 @@ class SiteSyncService {
   // ------------------------------------------------- details, on demand only
   // A title's page is downloaded only when its card is on screen, then the
   // result is saved on the phone and never downloaded again.
-  static const _detailsKey = 'moviebox.site_details';
+  String get _detailsKey => 'moviebox.site_details.${source.id}';
   Map<String, Map<String, dynamic>> _details = {};
   bool _detailsLoaded = false;
   Set<String> _known = {};
@@ -363,6 +379,7 @@ class SiteSyncService {
           'video_url': f.video,
           'language': RegExp('hindi', caseSensitive: false).hasMatch(f.title) ? 'Hindi' : null,
           'source': siteSourceName,
+              'category': source.label,
           'source_url': f.url,
           'release_year': _guessYear(f.title),
           'sort': stamp,
@@ -393,6 +410,7 @@ class SiteSyncService {
               'imgs': e.images,
               'language': RegExp('hindi', caseSensitive: false).hasMatch(title) ? 'Hindi' : null,
               'source': siteSourceName,
+              'category': source.label,
               'source_url': e.url,
               'release_year': _guessYear(title),
               'sort': (e.lastmod ?? now.subtract(Duration(seconds: i))).millisecondsSinceEpoch,
@@ -968,4 +986,57 @@ class SiteSyncService {
     if (e is TimeoutException) return 'The website took too long to respond.';
     return 'Could not reach the website. Check the address and your internet.';
   }
+}
+
+
+/// Runs and reads all configured websites together.
+class SiteSyncHub {
+  static final List<SiteSyncService> services = [
+    for (final s in siteSources) SiteSyncService._(s),
+  ];
+
+  static List<SiteSyncService> get active =>
+      services.where((s) => s.source.configured).toList(growable: false);
+  static bool get isRunning => services.any((s) => s.isRunning);
+
+  /// Titles of every website, each website newest first.
+  static Future<List<ContentItem>> cachedItems() async {
+    final all = <ContentItem>[];
+    for (final s in active) {
+      all.addAll(await s.cachedItems());
+    }
+    return all;
+  }
+
+  static Future<bool> shouldAutoSync() async {
+    for (final s in active) {
+      if (await s.shouldAutoSync()) return true;
+    }
+    return false;
+  }
+
+  /// Syncs every website that is due (or all of them when [force] is true).
+  static Future<SiteSyncResult> syncAll({bool force = false}) async {
+    var added = 0, total = 0;
+    String? error;
+    for (final s in active) {
+      if (!force && !await s.shouldAutoSync()) continue;
+      final r = await s.sync();
+      total += r.total;
+      added += r.added;
+      if (r.error != null) error ??= '${s.source.label}: ${r.error}';
+    }
+    return SiteSyncResult(total: total, added: added, pending: 0, method: 'all', error: error);
+  }
+
+  static SiteSyncService? _for(ContentItem item) {
+    if (item.source != siteSourceName) return null;
+    for (final s in services) {
+      if (s.source.label == item.category) return s;
+    }
+    return null;
+  }
+
+  static void requestDetails(ContentItem item) => _for(item)?.requestDetails(item.sourceUrl);
+  static void cancelDetails(ContentItem item) => _for(item)?.cancelDetails(item.sourceUrl);
 }

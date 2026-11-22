@@ -78,6 +78,9 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           SITE_URL: ${{ secrets.SITE_URL }}
+          SITE_URL_4K: ${{ secrets.SITE_URL_4K }}
+          SITE_URL_BOLLYWOOD: ${{ secrets.SITE_URL_BOLLYWOOD }}
+          SITE_URL_ANIME: ${{ secrets.SITE_URL_ANIME }}
         run: |
           cd app
           set -o pipefail
@@ -85,7 +88,10 @@ jobs:
             --build-number "$GITHUB_RUN_NUMBER" \
             --dart-define=SUPABASE_URL="$SUPABASE_URL" \
             --dart-define=SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY" \
-            --dart-define=SITE_URL="$SITE_URL" 2>&1 | tee ../build.log
+            --dart-define=SITE_URL="$SITE_URL" \
+            --dart-define=SITE_URL_4K="$SITE_URL_4K" \
+            --dart-define=SITE_URL_BOLLYWOOD="$SITE_URL_BOLLYWOOD" \
+            --dart-define=SITE_URL_ANIME="$SITE_URL_ANIME" 2>&1 | tee ../build.log
       - name: Show build error summary
         if: failure()
         run: |
