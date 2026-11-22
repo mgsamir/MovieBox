@@ -29,7 +29,11 @@ class _HomeScreenState extends State<HomeScreen> {
   String? error;
   List<ContentItem> catalog = [];
   List<ContentItem> siteItems = [];
-  String? cat; // selected category chip (null = All)
+  String? cat; // selected website category (null = All)
+  String? fGenre;
+  int? fYear;
+  int mode = 0; // 0 Home, 1 Movie, 2 TV/Series, 3 Anime
+  static const _modes = ['Home', 'Movie', 'TV/Series', 'Anime'];
   bool syncing = false;
   final catalogNotifier = ValueNotifier<List<ContentItem>>([]);
   final Set<String> saved = {};
@@ -210,23 +214,146 @@ class _HomeScreenState extends State<HomeScreen> {
   // ---------------- Home ----------------
   Widget home() => RefreshIndicator(onRefresh: () async { runSync(manual: true); await load(force: true); }, child: CustomScrollView(slivers: [
     SliverToBoxAdapter(child: topBar()),
+    SliverToBoxAdapter(child: modeTabs()),
     if (syncing) SliverToBoxAdapter(child: syncBar()),
-    if (SiteSyncHub.active.length > 1) SliverToBoxAdapter(child: categoryBar()),
-    if (heroItems.isNotEmpty) SliverToBoxAdapter(child: HeroBanner(items: heroItems, label: siteItems.isNotEmpty ? 'NEW' : 'TRENDING', onOpen: open)),
-    if (history.isNotEmpty) SliverToBoxAdapter(child: section('Continue Watching', all.where((e) => history.containsKey(e.id)).toList())),
-    for (final site in SiteSyncHub.active)
-      if (cat == null || cat == site.source.label)
-        SliverToBoxAdapter(child: section(site.source.label, siteItems.where((e) => e.category == site.source.label).toList())),
-    if (!loading && catalog.isNotEmpty && cat == null) ...[
-      SliverToBoxAdapter(child: section('Trending Now', catalog)),
-      SliverToBoxAdapter(child: section('Movies', catalog.where((e) => e.type.toLowerCase() == 'movie').toList())),
-      SliverToBoxAdapter(child: section('Web Series', catalog.where((e) => e.type.toLowerCase() == 'series').toList())),
-      SliverToBoxAdapter(child: section('Anime', catalog.where((e) => e.type.toLowerCase() == 'anime').toList())),
+    if (mode != 0) ...browseSlivers() else ...[
+      if (heroItems.isNotEmpty) SliverToBoxAdapter(child: HeroBanner(items: heroItems, onOpen: open)),
+      if (SiteSyncHub.active.length > 1) SliverToBoxAdapter(child: categoriesRow()),
+      if (history.isNotEmpty) SliverToBoxAdapter(child: section('Continue Watching', all.where((e) => history.containsKey(e.id)).toList())),
+      for (final site in SiteSyncHub.active)
+        if (cat == null || cat == site.source.label)
+          SliverToBoxAdapter(child: section(site.source.label, siteItems.where((e) => e.category == site.source.label).toList())),
+      if (!loading && catalog.isNotEmpty && cat == null) ...[
+        SliverToBoxAdapter(child: section('Trending Now', catalog)),
+        SliverToBoxAdapter(child: section('Movies', catalog.where((e) => e.type.toLowerCase() == 'movie').toList())),
+        SliverToBoxAdapter(child: section('Web Series', catalog.where((e) => e.type.toLowerCase() == 'series').toList())),
+        SliverToBoxAdapter(child: section('Anime', catalog.where((e) => e.type.toLowerCase() == 'anime').toList())),
+      ],
+      if (loading && siteItems.isEmpty) const SliverToBoxAdapter(child: Padding(padding: EdgeInsets.all(28), child: Center(child: CircularProgressIndicator(color: mint)))),
+      if (error != null && all.isEmpty && !syncing) SliverToBoxAdapter(child: message(error!, true)),
     ],
-    if (loading && siteItems.isEmpty) const SliverToBoxAdapter(child: Padding(padding: EdgeInsets.all(28), child: Center(child: CircularProgressIndicator(color: mint)))),
-    if (error != null && all.isEmpty && !syncing) SliverToBoxAdapter(child: message(error!, true)),
     const SliverToBoxAdapter(child: SizedBox(height: 24)),
   ]));
+
+  // ---------------- Tabs + Movie / TV / Anime browsing with filters ----------------
+  Widget modeTabs() => SizedBox(
+    height: 46,
+    child: Row(children: [
+      for (var i = 0; i < _modes.length; i++)
+        Expanded(child: InkWell(
+          onTap: () => setState(() { mode = i; fGenre = null; fYear = null; }),
+          child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+            Text(_modes[i], style: TextStyle(fontSize: 16, fontWeight: mode == i ? FontWeight.w800 : FontWeight.w500, color: mode == i ? Colors.white : Colors.white60)),
+            const SizedBox(height: 5),
+            Container(width: 24, height: 3, decoration: BoxDecoration(color: mode == i ? mint : Colors.transparent, borderRadius: BorderRadius.circular(2))),
+          ]),
+        )),
+    ]),
+  );
+
+  bool _isAnime(ContentItem e) => e.type.toLowerCase() == 'anime' || e.category == 'Anime';
+  List<ContentItem> modeItems() {
+    switch (mode) {
+      case 1: return all.where((e) => !_isAnime(e) && e.type.toLowerCase() == 'movie').toList();
+      case 2: return all.where((e) => !_isAnime(e) && e.type.toLowerCase() == 'series').toList();
+      default: return all.where(_isAnime).toList();
+    }
+  }
+
+  List<Widget> browseSlivers() {
+    final base = modeItems();
+    final items = base.where((e) =>
+        (cat == null || e.category == cat) &&
+        (fGenre == null || e.genres.contains(fGenre)) &&
+        (fYear == null || e.year == fYear)).toList();
+    return [
+      SliverToBoxAdapter(child: filterRow(base)),
+      if (items.isEmpty) SliverToBoxAdapter(child: Padding(
+        padding: const EdgeInsets.all(40),
+        child: Center(child: Text(loading || syncing ? 'Loading titles...' : 'No titles match these filters', style: const TextStyle(color: muted))),
+      )),
+      SliverPadding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+        sliver: SliverGrid(
+          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 3, childAspectRatio: .47, crossAxisSpacing: 10, mainAxisSpacing: 14),
+          delegate: SliverChildBuilderDelegate(
+            (_, i) => BrowseCard(item: items[i], onTap: () => open(items[i])),
+            childCount: items.length,
+          ),
+        ),
+      ),
+    ];
+  }
+
+  Widget filterRow(List<ContentItem> base) {
+    final counts = <String, int>{};
+    for (final e in base) {
+      for (final g in e.genres) { counts[g] = (counts[g] ?? 0) + 1; }
+    }
+    final genres = counts.keys.toList()..sort((a, b) => counts[b]!.compareTo(counts[a]!));
+    final years = base.map((e) => e.year).whereType<int>().toSet().toList()..sort((a, b) => b.compareTo(a));
+    final labels = SiteSyncHub.active.map((s) => s.source.label).toList();
+    final any = cat != null || fGenre != null || fYear != null;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 4, 8, 4),
+      child: SingleChildScrollView(scrollDirection: Axis.horizontal, child: Row(children: [
+        if (labels.length > 1) filterPill('Category', cat, labels, (v) => cat = v),
+        filterPill('Genre', fGenre, genres.take(40).toList(), (v) => fGenre = v),
+        filterPill('Year', fYear?.toString(), years.take(60).map((e) => e.toString()).toList(), (v) => fYear = v == null ? null : int.tryParse(v)),
+        if (any) IconButton(
+          tooltip: 'Clear filters',
+          icon: const Icon(Icons.filter_alt_off_outlined),
+          onPressed: () => setState(() { cat = null; fGenre = null; fYear = null; }),
+        ),
+      ])),
+    );
+  }
+
+  Widget filterPill(String label, String? value, List<String> options, void Function(String?) apply) => Padding(
+    padding: const EdgeInsets.only(right: 10),
+    child: OutlinedButton(
+      onPressed: () => pickFilter(label, value, options, apply),
+      style: OutlinedButton.styleFrom(
+        shape: const StadiumBorder(),
+        side: BorderSide(color: value == null ? Colors.white54 : mint),
+        foregroundColor: value == null ? Colors.white : mint,
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Text(value ?? label, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
+        const SizedBox(width: 4),
+        const Icon(Icons.keyboard_arrow_down, size: 20),
+      ]),
+    ),
+  );
+
+  void pickFilter(String title, String? value, List<String> options, void Function(String?) apply) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: panel,
+      isScrollControlled: true,
+      builder: (ctx) => SafeArea(child: ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: MediaQuery.of(ctx).size.height * .6),
+        child: ListView(shrinkWrap: true, children: [
+          ListTile(
+            title: Text('All $title'),
+            trailing: value == null ? const Icon(Icons.check, color: mint) : null,
+            onTap: () { Navigator.pop(ctx); setState(() => apply(null)); },
+          ),
+          if (options.isEmpty) const Padding(
+            padding: EdgeInsets.all(20),
+            child: Text('Nothing to choose yet. Genres and years appear as titles load.', style: TextStyle(color: muted)),
+          ),
+          for (final o in options)
+            ListTile(
+              title: Text(o),
+              trailing: o == value ? const Icon(Icons.check, color: mint) : null,
+              onTap: () { Navigator.pop(ctx); setState(() => apply(o)); },
+            ),
+        ]),
+      )),
+    );
+  }
 
   Widget topBar() => Padding(
     padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
@@ -255,6 +382,11 @@ class _HomeScreenState extends State<HomeScreen> {
       )),
     ]),
   );
+
+  Widget categoriesRow() => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+    const Padding(padding: EdgeInsets.fromLTRB(18, 8, 16, 2), child: Text('Categories', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800))),
+    categoryBar(),
+  ]);
 
   Widget categoryBar() => SizedBox(
     height: 46,
@@ -592,74 +724,71 @@ class _SettingsPageState extends State<SettingsPage>{
 }
 
 
-// ---------------- Hero banner (newest / trending first) ----------------
+// ---------------- Hero banner + mini cards (newest / trending first) ----------------
 class HeroBanner extends StatefulWidget {
   final List<ContentItem> items;
-  final String label;
   final ValueChanged<ContentItem> onOpen;
-  const HeroBanner({super.key, required this.items, required this.label, required this.onOpen});
+  const HeroBanner({super.key, required this.items, required this.onOpen});
   @override State<HeroBanner> createState() => _HeroBannerState();
 }
 
 class _HeroBannerState extends State<HeroBanner> {
-  final _controller = PageController();
+  final _page = PageController();
+  final _strip = ScrollController();
   Timer? _timer;
   int _index = 0;
 
   @override void initState() {
     super.initState();
     _timer = Timer.periodic(const Duration(seconds: 5), (_) {
-      if (!mounted || widget.items.length < 2 || !_controller.hasClients) return;
-      _controller.animateToPage((_index + 1) % widget.items.length,
+      if (!mounted || widget.items.length < 2 || !_page.hasClients) return;
+      _page.animateToPage((_index + 1) % widget.items.length,
           duration: const Duration(milliseconds: 450), curve: Curves.easeOut);
     });
   }
-  @override void dispose() { _timer?.cancel(); _controller.dispose(); super.dispose(); }
+  @override void dispose() { _timer?.cancel(); _page.dispose(); _strip.dispose(); super.dispose(); }
 
-  @override Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.fromLTRB(16, 8, 16, 6),
-    child: ClipRRect(
-      borderRadius: BorderRadius.circular(20),
-      child: SizedBox(height: 300, child: Stack(children: [
-        PageView.builder(
-          controller: _controller,
-          itemCount: widget.items.length,
-          onPageChanged: (i) => setState(() => _index = i),
-          itemBuilder: (_, i) => HeroSlide(item: widget.items[i], label: widget.label, onOpen: widget.onOpen),
-        ),
-        Positioned(right: 14, bottom: 14, child: Row(children: [
-          for (var i = 0; i < widget.items.length; i++)
-            AnimatedContainer(
-              duration: const Duration(milliseconds: 250),
-              margin: const EdgeInsets.only(left: 5),
-              width: i == _index ? 18 : 6, height: 6,
-              decoration: BoxDecoration(
-                color: i == _index ? mint : Colors.white38,
-                borderRadius: BorderRadius.circular(3),
-              ),
-            ),
-        ])),
-      ])),
-    ),
+  void _changed(int i) {
+    setState(() => _index = i);
+    if (_strip.hasClients) {
+      _strip.animateTo((i * 312.0).clamp(0.0, _strip.position.maxScrollExtent),
+          duration: const Duration(milliseconds: 350), curve: Curves.easeOut);
+    }
+  }
+
+  @override Widget build(BuildContext context) => SizedBox(
+    height: 420,
+    child: Stack(children: [
+      Positioned(top: 0, left: 0, right: 0, height: 390, child: PageView.builder(
+        controller: _page,
+        itemCount: widget.items.length,
+        onPageChanged: _changed,
+        itemBuilder: (_, i) => HeroSlide(item: widget.items[i], onOpen: widget.onOpen),
+      )),
+      Positioned(left: 0, right: 0, bottom: 0, height: 96, child: ListView.builder(
+        controller: _strip,
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        itemCount: widget.items.length,
+        itemBuilder: (_, i) => MiniCard(item: widget.items[i], selected: i == _index, onOpen: widget.onOpen),
+      )),
+    ]),
   );
 }
 
 class HeroSlide extends StatefulWidget {
   final ContentItem item;
-  final String label;
   final ValueChanged<ContentItem> onOpen;
-  const HeroSlide({super.key, required this.item, required this.label, required this.onOpen});
+  const HeroSlide({super.key, required this.item, required this.onOpen});
   @override State<HeroSlide> createState() => _HeroSlideState();
 }
 
 class _HeroSlideState extends State<HeroSlide> {
-
   @override void initState() { super.initState(); SiteSyncHub.requestDetails(widget.item); }
   @override void dispose() { SiteSyncHub.cancelDetails(widget.item); super.dispose(); }
 
   @override Widget build(BuildContext context) {
     final item = widget.item;
-    final meta = [if (item.year != null) item.year.toString(), item.type, if (item.language != null) item.language!].join(' • ');
     return GestureDetector(
       onTap: () => widget.onOpen(item),
       child: Stack(fit: StackFit.expand, children: [
@@ -670,30 +799,122 @@ class _HeroSlideState extends State<HeroSlide> {
             item.posterUrl!,
             fit: BoxFit.cover,
             alignment: Alignment.topCenter,
-            cacheWidth: 800,
+            cacheWidth: 900,
             errorBuilder: (_, __, ___) => const SizedBox.shrink(),
           ),
+        if (item.posterUrl == null) Center(child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Text(item.title, textAlign: TextAlign.center, maxLines: 3, overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
+        )),
         const DecoratedBox(decoration: BoxDecoration(gradient: LinearGradient(
           begin: Alignment.topCenter, end: Alignment.bottomCenter,
-          colors: [Colors.transparent, Color(0x99101114), Color(0xFF101114)], stops: [.35, .7, 1]))),
-        Positioned(left: 14, top: 14, child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
-          decoration: BoxDecoration(color: mint, borderRadius: BorderRadius.circular(6)),
-          child: Text(widget.label, style: const TextStyle(color: Colors.black, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: .6)),
+          colors: [Colors.transparent, Color(0xFF101114)], stops: [.7, 1]))),
+      ]),
+    );
+  }
+}
+
+class MiniCard extends StatefulWidget {
+  final ContentItem item;
+  final bool selected;
+  final ValueChanged<ContentItem> onOpen;
+  const MiniCard({super.key, required this.item, required this.selected, required this.onOpen});
+  @override State<MiniCard> createState() => _MiniCardState();
+}
+
+class _MiniCardState extends State<MiniCard> {
+  @override void initState() { super.initState(); SiteSyncHub.requestDetails(widget.item); }
+  @override void dispose() { SiteSyncHub.cancelDetails(widget.item); super.dispose(); }
+
+  @override Widget build(BuildContext context) {
+    final item = widget.item;
+    final meta = [if (item.year != null) item.year.toString(), if (item.category != null) item.category!, if (item.category == null) item.type].join('  |  ');
+    return Container(
+      width: 300,
+      margin: const EdgeInsets.only(right: 12),
+      child: Material(
+        color: const Color(0xEE1D1F23),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: BorderSide(color: widget.selected ? mint : Colors.transparent, width: 1.5),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: () => widget.onOpen(item),
+          child: Padding(padding: const EdgeInsets.all(10), child: Row(children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: SizedBox(width: 50, height: 74, child: item.posterUrl == null
+                  ? const PosterFallback()
+                  : Image.network(item.posterUrl!, fit: BoxFit.cover, cacheWidth: 150, errorBuilder: (_, __, ___) => const PosterFallback())),
+            ),
+            const SizedBox(width: 12),
+            Expanded(child: Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(item.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 4),
+              Text(meta, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: muted, fontSize: 13)),
+            ])),
+            const SizedBox(width: 8),
+            Container(
+              width: 44, height: 44,
+              decoration: const BoxDecoration(color: mint, shape: BoxShape.circle),
+              child: const Icon(Icons.play_arrow, color: Colors.black, size: 28),
+            ),
+          ])),
+        ),
+      ),
+    );
+  }
+}
+
+// ---------------- Grid card for Movie / TV / Anime browsing ----------------
+class BrowseCard extends StatefulWidget {
+  final ContentItem item;
+  final VoidCallback onTap;
+  const BrowseCard({super.key, required this.item, required this.onTap});
+  @override State<BrowseCard> createState() => _BrowseCardState();
+}
+
+class _BrowseCardState extends State<BrowseCard> {
+  @override void initState() { super.initState(); SiteSyncHub.requestDetails(widget.item); }
+  @override void dispose() { SiteSyncHub.cancelDetails(widget.item); super.dispose(); }
+
+  @override Widget build(BuildContext context) {
+    final item = widget.item;
+    final sub = item.genres.isNotEmpty
+        ? item.genres.take(3).join(', ')
+        : [item.type, if (item.year != null) item.year.toString()].join(' \u2022 ');
+    return InkWell(
+      onTap: widget.onTap,
+      borderRadius: BorderRadius.circular(10),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        AspectRatio(aspectRatio: 2 / 3, child: ClipRRect(
+          borderRadius: BorderRadius.circular(10),
+          child: Stack(fit: StackFit.expand, children: [
+            item.posterUrl == null
+                ? const PosterFallback()
+                : Image.network(
+                    item.posterUrl!,
+                    fit: BoxFit.cover,
+                    cacheWidth: 300,
+                    loadingBuilder: (_, child, progress) => progress == null ? child : const PosterFallback(),
+                    errorBuilder: (_, __, ___) => const PosterFallback()),
+            if (item.language != null) Positioned(top: 0, right: 0, child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+              decoration: const BoxDecoration(color: Color(0xCC1D1F23), borderRadius: BorderRadius.only(bottomLeft: Radius.circular(8))),
+              child: Text(item.language!, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+            )),
+            if (item.rating != null) Positioned(right: 8, bottom: 6, child: Text(
+              item.rating!.toStringAsFixed(1),
+              style: const TextStyle(color: Color(0xFFF2C94C), fontWeight: FontWeight.w800, fontSize: 17, shadows: [Shadow(blurRadius: 5)]),
+            )),
+          ]),
         )),
-        Positioned(left: 16, right: 16, bottom: 16, child: Column(
-          mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(item.title, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800, height: 1.15)),
-          const SizedBox(height: 4),
-          Text(meta, style: const TextStyle(color: Colors.white70, fontSize: 12.5)),
-          const SizedBox(height: 10),
-          FilledButton.icon(
-            onPressed: () => widget.onOpen(item),
-            icon: const Icon(Icons.play_arrow, size: 20),
-            label: const Text('Watch now'),
-            style: FilledButton.styleFrom(backgroundColor: mint, foregroundColor: Colors.black, visualDensity: VisualDensity.compact),
-          ),
-        ])),
+        const SizedBox(height: 7),
+        Text(item.title, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14, height: 1.2)),
+        const SizedBox(height: 2),
+        Text(sub, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: muted, fontSize: 12)),
       ]),
     );
   }

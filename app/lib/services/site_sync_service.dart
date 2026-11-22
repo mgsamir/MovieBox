@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:html/dom.dart' as dom;
 import 'package:html/parser.dart' as html_parser;
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -53,8 +54,14 @@ class _Found {
   final String? poster, synopsis, video;
   final DateTime? date;
   final List<String> images;
+  final List<String> genres;
   const _Found(this.url, this.title,
-      {this.poster, this.synopsis, this.video, this.date, this.images = const []});
+      {this.poster,
+      this.synopsis,
+      this.video,
+      this.date,
+      this.images = const [],
+      this.genres = const []});
 }
 
 /// Syncs the catalogue of a website the user owns, entirely on the device.
@@ -265,6 +272,7 @@ class SiteSyncService {
           if (RegExp('hindi', caseSensitive: false).hasMatch(f.title)) 'language': 'Hindi',
           if (f.poster != null) 'poster_url': f.poster,
           if (f.images.isNotEmpty) 'imgs': f.images,
+          if (f.genres.isNotEmpty) 'genres': f.genres,
           if (f.synopsis != null) 'synopsis': f.synopsis,
           if (f.video != null) 'video_url': f.video,
         };
@@ -760,6 +768,7 @@ class SiteSyncService {
       return _Found(url, title,
           poster: poster,
           images: images,
+          genres: _genresOf(doc),
           synopsis: desc.isEmpty ? null : _shorten(desc),
           video: video,
           date: DateTime.tryParse(meta('article:published_time') ?? ''));
@@ -967,6 +976,57 @@ class SiteSyncService {
       h = (h * 0x01000193) & 0xFFFFFFFF;
     }
     return h.toRadixString(16).padLeft(8, '0');
+  }
+
+  /// Genres from the page's structured data or category links (best effort).
+  List<String> _genresOf(dom.Document doc) {
+    final out = <String>[];
+    final junk = RegExp(
+        r'^(uncategorized|home|movies?|series|hindi|dubbed|dual audio|english|hd|uhd|4k|\d+p?)$',
+        caseSensitive: false);
+    void add(String? raw) {
+      if (raw == null) return;
+      for (final part in raw.split(RegExp(r'[,|/\u2022]'))) {
+        final g = part.replaceAll(RegExp(r'\s+'), ' ').trim();
+        if (g.length < 3 || g.length > 24 || out.length >= 5 || junk.hasMatch(g)) continue;
+        if (out.any((o) => o.toLowerCase() == g.toLowerCase())) continue;
+        out.add(g[0].toUpperCase() + g.substring(1));
+      }
+    }
+
+    void walk(Object? node) {
+      if (node is Map) {
+        node.forEach((k, v) {
+          if (k == 'genre') {
+            if (v is List) {
+              for (final e in v) {
+                add(e?.toString());
+              }
+            } else {
+              add(v?.toString());
+            }
+          } else {
+            walk(v);
+          }
+        });
+      } else if (node is List) {
+        for (final e in node) {
+          walk(e);
+        }
+      }
+    }
+
+    for (final script in doc.querySelectorAll('script[type="application/ld+json"]')) {
+      try {
+        walk(jsonDecode(script.text));
+      } catch (_) {}
+    }
+    add(doc.querySelector('meta[property="article:section"]')?.attributes['content']);
+    for (final a in doc.querySelectorAll(
+        'a[rel~="category"], .cat-links a, .genres a, .genre a, .entry-categories a')) {
+      add(a.text);
+    }
+    return out;
   }
 
   String _guessType(String title) => RegExp(

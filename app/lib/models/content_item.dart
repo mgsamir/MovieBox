@@ -10,6 +10,7 @@ class ContentItem {
   final String? source;
   final String? sourceUrl;
   final String? category;
+  final List<String> genres;
   final int? year;
   final double? rating;
 
@@ -25,6 +26,7 @@ class ContentItem {
         source = _stringValue(map['source']),
         sourceUrl = _stringValue(map['source_url']),
         category = _stringValue(map['category']),
+        genres = _genreList(map['genres']),
         year = int.tryParse(map['release_year']?.toString() ?? ''),
         rating = double.tryParse(map['rating']?.toString() ?? '');
 
@@ -40,6 +42,7 @@ class ContentItem {
         'source': source,
         'source_url': sourceUrl,
         'category': category,
+        'genres': genres,
         'release_year': year,
         'rating': rating,
       };
@@ -49,4 +52,14 @@ String? _stringValue(dynamic value) {
   if (value == null) return null;
   final text = value.toString().trim();
   return text.isEmpty ? null : text;
+
+  static List<String> _genreList(Object? raw) {
+    if (raw is List) {
+      return raw.map((e) => e.toString().trim()).where((e) => e.isNotEmpty).toList(growable: false);
+    }
+    if (raw is String && raw.trim().isNotEmpty) {
+      return raw.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList(growable: false);
+    }
+    return const [];
+  }
 }
