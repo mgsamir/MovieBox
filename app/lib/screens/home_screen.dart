@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../config.dart';
@@ -18,7 +20,7 @@ class HomeScreen extends StatefulWidget {
   @override State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
+class _HomeScreenState extends State<HomeScreen> {
   CatalogService? service;
   int tab = 0;
   String watchMode = 'streaming';
@@ -35,20 +37,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   @override void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
     restoreLocalData();
     load();
     loadSite();
     SiteSyncService.instance.revision.addListener(siteChanged);
   }
   @override void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
     SiteSyncService.instance.revision.removeListener(siteChanged);
     catalogNotifier.dispose();
     super.dispose();
-  }
-  @override void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) autoSyncIfDue();
   }
 
   // ---------------- Website sync ----------------
@@ -108,11 +105,46 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     setState(() { if (!saved.add(item.id)) saved.remove(item.id); });
     await persistCollections();
   }
-  Future<void> load() async {
+  // The catalogue is saved on the phone and reused for 12 hours, so opening
+  // the app does not download it again. Pull down to refresh manually.
+  static const _catalogKey = 'moviebox.catalog_cache';
+  static const _catalogTimeKey = 'moviebox.catalog_time';
+
+  List<ContentItem>? readCatalogCache(SharedPreferences prefs, {bool ignoreAge = false}) {
+    try {
+      final raw = prefs.getString(_catalogKey);
+      final time = DateTime.tryParse(prefs.getString(_catalogTimeKey) ?? '');
+      if (raw == null || time == null) return null;
+      if (!ignoreAge && DateTime.now().difference(time) > const Duration(hours: 12)) return null;
+      final list = (jsonDecode(raw) as List)
+          .whereType<Map>()
+          .map((m) => ContentItem.fromMap(Map<String, dynamic>.from(m)))
+          .toList();
+      return list.isEmpty ? null : list;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> load({bool force = false}) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!force) {
+      final cached = readCatalogCache(prefs);
+      if (cached != null) {
+        if (!mounted) return;
+        setState(() { catalog = cached; loading = false; error = null; });
+        catalogNotifier.value = all;
+        return;
+      }
+    }
     setState(() { loading = true; error = null; });
     try {
       final data = await (service ??= CatalogService()).loadAll(limit: 150);
       if (!mounted) return;
+      if (data.isNotEmpty) {
+        await prefs.setString(_catalogKey, jsonEncode(data.map((e) => e.toMap()).toList()));
+        await prefs.setString(_catalogTimeKey, DateTime.now().toIso8601String());
+      }
       setState(() {
         catalog = data;
         loading = false;
@@ -123,10 +155,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       catalogNotifier.value = all;
     } catch (_) {
       if (!mounted) return;
+      // Offline: fall back to the last saved catalogue, however old.
+      final old = readCatalogCache(prefs, ignoreAge: true);
       setState(() {
+        if (old != null) catalog = old;
         loading = false;
-        error = 'Could not load catalogue. Check internet and pull down to retry.';
+        error = old != null ? null : 'Could not load catalogue. Check internet and pull down to retry.';
       });
+      catalogNotifier.value = all;
     }
   }
 
@@ -159,7 +195,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     icon: Icon(a, color: Colors.white70), selectedIcon: Icon(b, color: mint), label: label);
 
   // ---------------- Home ----------------
-  Widget home() => RefreshIndicator(onRefresh: () async { runSync(manual: true); await load(); }, child: CustomScrollView(slivers: [
+  Widget home() => RefreshIndicator(onRefresh: () async { runSync(manual: true); await load(force: true); }, child: CustomScrollView(slivers: [
     SliverToBoxAdapter(child: topBar()),
     if (syncing) SliverToBoxAdapter(child: syncBar()),
     if (history.isNotEmpty) SliverToBoxAdapter(child: section('Continue Watching', all.where((e) => history.containsKey(e.id)).toList())),
@@ -318,7 +354,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     const Icon(Icons.cloud_off_outlined, size: 42, color: muted),
     const SizedBox(height: 12),
     Text(text, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white70)),
-    if (retry) TextButton.icon(onPressed: load, icon: const Icon(Icons.refresh), label: const Text('Try again')),
+    if (retry) TextButton.icon(onPressed: () => load(force: true), icon: const Icon(Icons.refresh), label: const Text('Try again')),
   ])));
 }
 

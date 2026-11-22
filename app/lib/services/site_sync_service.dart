@@ -182,14 +182,12 @@ class SiteSyncService {
     }
   }
 
-  /// Auto sync when a website is configured and it has not synced for 3 hours,
-  /// or an earlier sync stopped before reading every page.
+  /// Auto sync when a website is configured and it has not synced for 24 hours.
   Future<bool> shouldAutoSync() async {
     final prefs = await SharedPreferences.getInstance();
     if (_configured(prefs) == null) return false;
-    if ((prefs.getInt(_pendingKey) ?? 0) > 0) return true;
     final last = DateTime.tryParse(prefs.getString(_lastKey) ?? '');
-    return last == null || DateTime.now().difference(last) > const Duration(hours: 3);
+    return last == null || DateTime.now().difference(last) > const Duration(hours: 24);
   }
 
   // -------------------------------------------------------------------- sync
@@ -291,7 +289,7 @@ class SiteSyncService {
           }).toList()
             ..sort((a, b) => ((items[b.url]!['sort'] as num?) ?? 0)
                 .compareTo((items[a.url]!['sort'] as num?) ?? 0));
-          final deadline = DateTime.now().add(const Duration(seconds: 150));
+          final deadline = DateTime.now().add(const Duration(seconds: 300));
           var done = 0;
           var chunks = 0;
           var ok = 0;

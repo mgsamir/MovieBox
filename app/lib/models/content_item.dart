@@ -25,6 +25,21 @@ class ContentItem {
         sourceUrl = _stringValue(map['source_url']),
         year = int.tryParse(map['release_year']?.toString() ?? ''),
         rating = double.tryParse(map['rating']?.toString() ?? '');
+
+  Map<String, dynamic> toMap() => {
+        'id': id,
+        'title': title,
+        'content_type': type,
+        'synopsis': synopsis,
+        'poster_url': posterUrl,
+        'backdrop_url': backdropUrl,
+        'video_url': videoUrl,
+        'language': language,
+        'source': source,
+        'source_url': sourceUrl,
+        'release_year': year,
+        'rating': rating,
+      };
 }
 
 String? _stringValue(dynamic value) {
