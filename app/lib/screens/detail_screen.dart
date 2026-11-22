@@ -9,6 +9,7 @@ import '../services/video_link_resolver.dart';
 import '../services/media_options.dart';
 import 'browser_video_finder_screen.dart';
 import 'download_sheet.dart';
+import 'download_sheet.dart';
 import 'player_screen.dart';
 
 class DetailScreen extends StatefulWidget {
@@ -154,6 +155,34 @@ class _DetailScreenState extends State<DetailScreen> {
       ),
     );
     if (result == 'downloading') _snack('Download started. Check the Downloads tab.');
+  }
+
+  /// Shows every language and quality the page offers, then downloads the choice.
+  Future<void> _downloadFlow() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    _snack('Finding available languages and qualities...');
+    final item = widget.item;
+    final targets = <String>[
+      if (item.videoUrl != null && item.videoUrl!.startsWith('https://')) item.videoUrl!,
+      if (item.sourceUrl != null) item.sourceUrl!,
+    ];
+    var options = <MediaOption>[];
+    for (final t in targets) {
+      try {
+        options = await VideoLinkResolver.resolveAll(t);
+      } catch (_) {}
+      if (options.isNotEmpty) break;
+    }
+    if (!mounted) return;
+    setState(() => _busy = false);
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    if (options.isEmpty) {
+      _snack('No downloadable file was found. Opening the page so you can play the video there.');
+      _openBrowserFinder();
+      return;
+    }
+    await showDownloadSheet(context, title: item.title, options: options, preferredLanguage: item.language);
   }
 
   Future<void> _siteAction({required bool download}) async {
@@ -351,7 +380,7 @@ class _DetailScreenState extends State<DetailScreen> {
               const SizedBox(width: 12),
               Expanded(
                 child: OutlinedButton.icon(
-                  onPressed: _busy ? null : () => _siteAction(download: true),
+                  onPressed: _busy ? null : _downloadFlow,
                   icon: const Icon(Icons.download),
                   label: const Text('Download'),
                   style: OutlinedButton.styleFrom(

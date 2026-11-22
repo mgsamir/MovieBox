@@ -23,8 +23,198 @@ class ResolvedVideoSource {
   }
 }
 
+/// One downloadable or playable file found on a page, with what could be
+/// told about it (language and quality come from labels and file names).
+class MediaOption {
+  final ResolvedVideoSource source;
+  final String? language; // null = original audio
+  final int? height;
+  final int? sizeBytes;
+  const MediaOption({required this.source, this.language, this.height, this.sizeBytes});
+
+  Uri get uri => source.uri;
+  bool get canDownload => source.canDownload;
+  String get languageLabel =>
+      language == null ? 'Original Audio' : (language == 'English' ? 'English' : '$language dub');
+  String get qualityLabel => height == null ? (source.isHls ? 'Stream' : 'Video') : '${height}P';
+  MediaOption withSize(int? bytes) =>
+      MediaOption(source: source, language: language, height: height, sizeBytes: bytes);
+}
+
+class _RawMedia {
+  final Uri uri;
+  String label;
+  _RawMedia(this.uri, this.label);
+}
+
 class VideoLinkResolver {
   VideoLinkResolver._();
+
+  static const _languageNames = {
+    'hindi': 'Hindi', 'tamil': 'Tamil', 'telugu': 'Telugu', 'malayalam': 'Malayalam',
+    'kannada': 'Kannada', 'bengali': 'Bengali', 'punjabi': 'Punjabi', 'marathi': 'Marathi',
+    'english': 'English', 'spanish': 'Spanish', 'portuguese': 'Portuguese',
+    'french': 'French', 'japanese': 'Japanese', 'korean': 'Korean',
+  };
+  static final _mediaRegex = RegExp(
+      r'''https?://[^"'\s<>\\]+?\.(?:mp4|m3u8|webm|m4v|mkv)(?:\?[^"'\s<>\\]*)?''',
+      caseSensitive: false);
+
+  static int? _heightOf(String text) {
+    final t = text.toLowerCase();
+    final m = RegExp(r'(?<![0-9])(2160|1440|1080|720|576|480|360|240)\s*p').firstMatch(t);
+    if (m != null) return int.parse(m.group(1)!);
+    if (RegExp(r'(?<![a-z0-9])(4k|uhd)(?![a-z0-9])').hasMatch(t)) return 2160;
+    return null;
+  }
+
+  static String? _languageOf(String text) {
+    final t = text.toLowerCase();
+    for (final e in _languageNames.entries) {
+      if (t.contains(e.key)) return e.value;
+    }
+    return null;
+  }
+
+  /// Every video file the page (and the site's own download pages) offers,
+  /// with language, quality and size, so the user can choose what to download.
+  static Future<List<MediaOption>> resolveAll(String rawUrl) async {
+    final raw = <String, _RawMedia>{};
+    await _collect(rawUrl, 0, null, '', raw, <String>{});
+
+    final options = <MediaOption>[];
+    final taken = <String>{};
+    for (final r in raw.values) {
+      final ext = _extension(r.uri);
+      final source = ResolvedVideoSource(
+        uri: r.uri,
+        contentType: ext == 'm3u8' ? 'application/vnd.apple.mpegurl' : 'video/$ext',
+      );
+      final name = r.uri.pathSegments.isEmpty ? '' : r.uri.pathSegments.last;
+      final text = '${r.label} $name';
+      final height = _heightOf(text);
+      final language = _languageOf(text);
+      // Mirrors of the same quality and language: keep the first.
+      if (height != null && !taken.add('${language ?? ''}|$height|${source.isHls}')) continue;
+      options.add(MediaOption(source: source, language: language, height: height));
+    }
+
+    final sized = List<MediaOption>.from(await Future.wait(options.take(16).map((o) async {
+      if (o.source.isHls) return o;
+      try {
+        final head = await _client
+            .head(o.uri, headers: const {'User-Agent': 'MovieBox Android'})
+            .timeout(const Duration(seconds: 6));
+        return o.withSize(int.tryParse(head.headers['content-length'] ?? ''));
+      } catch (_) {
+        return o;
+      }
+    })));
+    sized.sort((a, b) {
+      final l = (a.language ?? '').compareTo(b.language ?? '');
+      return l != 0 ? l : (b.height ?? 0).compareTo(a.height ?? 0);
+    });
+    return sized;
+  }
+
+  static Future<void> _collect(String rawUrl, int depth, Uri? referer, String hint,
+      Map<String, _RawMedia> out, Set<String> seen) async {
+    final pageUri = Uri.tryParse(rawUrl.trim());
+    if (pageUri == null ||
+        pageUri.scheme != 'https' ||
+        pageUri.host.isEmpty ||
+        pageUri.userInfo.isNotEmpty) {
+      return;
+    }
+    if (seen.length > 12 || !seen.add(pageUri.toString())) return;
+
+    void add(Uri uri, String label) {
+      if (uri.scheme != 'https' || uri.host.isEmpty || uri.userInfo.isNotEmpty) return;
+      if (!_mediaExtensions.contains(_extension(uri))) return;
+      final text = '$hint $label'.trim();
+      final old = out[uri.toString()];
+      if (old == null) {
+        out[uri.toString()] = _RawMedia(uri, text);
+      } else if (text.length > old.label.length) {
+        old.label = text;
+      }
+    }
+
+    if (_mediaExtensions.contains(_extension(pageUri))) {
+      add(pageUri, '');
+      return;
+    }
+
+    http.Response response;
+    try {
+      response = await _client.get(pageUri, headers: {
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 Chrome/130 Mobile Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
+        if (referer != null) 'Referer': referer.toString(),
+      }).timeout(const Duration(seconds: 20));
+    } catch (_) {
+      return;
+    }
+    final type = response.headers['content-type']?.toLowerCase() ?? '';
+    if (response.statusCode < 200 || response.statusCode >= 400) return;
+    if (!type.contains('html') || response.bodyBytes.length > 2 * 1024 * 1024) return;
+
+    final document = html_parser.parse(utf8.decode(response.bodyBytes, allowMalformed: true));
+
+    for (final el in document.querySelectorAll('video[src], video source[src], source[src]')) {
+      final src = el.attributes['src']?.trim();
+      if (src == null || src.isEmpty) continue;
+      final parts = <String>[
+        for (final k in const ['label', 'title', 'res', 'data-res', 'data-quality', 'data-lang', 'srclang'])
+          if (el.attributes[k] != null) el.attributes[k]!,
+      ];
+      final size = (el.attributes['size'] ?? '').trim();
+      if (RegExp(r'^\d{3,4}$').hasMatch(size)) parts.add('${size}p');
+      add(pageUri.resolve(src), parts.join(' '));
+    }
+
+    final follow = <MapEntry<String, String>>[];
+    for (final a in document.querySelectorAll('a[href]')) {
+      final href = a.attributes['href']?.trim() ?? '';
+      if (href.isEmpty || href.startsWith('#') || href.startsWith('javascript:')) continue;
+      final target = pageUri.resolve(href);
+      final text = '${a.text} ${a.attributes['title'] ?? ''}'.replaceAll(RegExp(r'\s+'), ' ').trim();
+      if (_mediaExtensions.contains(_extension(target))) {
+        add(target, text);
+        continue;
+      }
+      final lower = '${text.toLowerCase()} ${href.toLowerCase()}';
+      if (depth == 0 &&
+          target.scheme == 'https' &&
+          target.host == pageUri.host &&
+          target != pageUri &&
+          (lower.contains('download') || _heightOf(lower) != null)) {
+        follow.add(MapEntry(target.toString(), text));
+      }
+    }
+
+    final cleaned = response.body
+        .replaceAll(r'\/', '/')
+        .replaceAll(r'\u0026', '&')
+        .replaceAll('&amp;', '&');
+    for (final m in _mediaRegex.allMatches(cleaned)) {
+      final uri = Uri.tryParse(m.group(0)!.replaceFirst('http://', 'https://'));
+      if (uri != null) add(uri, '');
+    }
+
+    if (depth == 0) {
+      final frames = <String>[];
+      for (final fr in document.querySelectorAll('iframe[src], iframe[data-src]')) {
+        final src = (fr.attributes['src'] ?? fr.attributes['data-src'] ?? '').trim();
+        if (src.isEmpty || src.startsWith('about:') || src.startsWith('javascript:')) continue;
+        frames.add(pageUri.resolve(src).toString());
+      }
+      await Future.wait([
+        for (final f in follow.take(8)) _collect(f.key, 1, pageUri, f.value, out, seen),
+        for (final f in frames.take(3)) _collect(f, 1, pageUri, hint, out, seen),
+      ]);
+    }
+  }
 
   static const _mediaExtensions = {
     'mp4', 'm4v', 'mov', 'webm', 'mkv', 'm3u8'
