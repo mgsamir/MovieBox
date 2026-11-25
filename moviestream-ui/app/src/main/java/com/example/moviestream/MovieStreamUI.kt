@@ -1,7 +1,11 @@
 package com.example.moviestream
 
+import android.app.DownloadManager
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
+import android.os.Environment
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -30,20 +34,28 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
@@ -60,6 +72,9 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import coil.compose.AsyncImage
+import com.example.moviebox.extract.ExtractedPage
+import com.example.moviebox.extract.PageExtractor
+import com.example.moviebox.extract.PlayerActivity
 
 /*
  * ---------------------------------------------------------------
@@ -71,12 +86,17 @@ import coil.compose.AsyncImage
  *  implementation("androidx.activity:activity-compose:1.9.3")
  *  implementation("androidx.navigation:navigation-compose:2.8.3")
  *  implementation("io.coil-kt:coil-compose:2.7.0")
+ *  implementation("androidx.appcompat:appcompat:1.7.0")
+ *  implementation("androidx.media3:media3-exoplayer:1.4.1")
+ *  implementation("androidx.media3:media3-exoplayer-hls:1.4.1")
+ *  implementation("androidx.media3:media3-ui:1.4.1")
  *
  *  AndroidManifest.xml:
  *    <uses-permission android:name="android.permission.INTERNET" />
  *    and set android:name=".MainActivity" on your launcher activity.
- *
- *  No WebView is used anywhere. Only UI and click handling.
+ *    PlayerActivity (com.example.moviebox.extract.PlayerActivity) must also
+ *    be declared, with a hidden WebView used only to read your own pages
+ *    (see HiddenPageExtractor.kt) — never shown to the user.
  * ---------------------------------------------------------------
  */
 
@@ -93,6 +113,9 @@ data class Movie(
     val rating: Double,
     val posterUrl: String,
     val synopsis: String,
+    /** Your own webpage for this title; Play resolves the live video from here. */
+    val sourcePageUrl: String,
+    /** Known direct files per quality, used by the Download sheet. */
     val links: List<QualityLink>,
 )
 
@@ -106,6 +129,7 @@ val sampleMovies: List<Movie> = List(12) { i ->
         rating = 7.0 + (i % 20) / 10.0,
         posterUrl = "https://picsum.photos/seed/movie$i/400/600",
         synopsis = "Yahan movie ki short kahani aayegi. Ye text aap apne server se laoge.",
+        sourcePageUrl = "https://your-server.com/movie/$i",
         links = listOf(
             QualityLink("480p", "https://your-server.com/m$i/480.mp4"),
             QualityLink("720p", "https://your-server.com/m$i/720.mp4"),
@@ -114,14 +138,45 @@ val sampleMovies: List<Movie> = List(12) { i ->
     )
 }
 
-// ------------------------------------------------------------- Click handling
+// ------------------------------------------------------------- Play
 
 /**
- * Called when the user taps 480p / 720p / 1080p.
- * Put your own player (ExoPlayer) or download code here.
+ * Reads [Movie.sourcePageUrl] with the hidden WebView extractor, then hands
+ * the resolved video URL to [PlayerActivity] for native ExoPlayer playback.
+ * No browser is ever shown.
  */
-fun onQualitySelected(context: Context, movie: Movie, link: QualityLink) {
-    Toast.makeText(context, "${movie.title} • ${link.label}\n${link.url}", Toast.LENGTH_SHORT).show()
+fun playMovie(context: Context, movie: Movie, onDone: () -> Unit) {
+    PageExtractor(context).extract(movie.sourcePageUrl) { result: ExtractedPage? ->
+        onDone()
+        val videoUrl = result?.videoUrl
+        if (videoUrl.isNullOrBlank()) {
+            Toast.makeText(context, "Could not find a playable video for ${movie.title}.", Toast.LENGTH_SHORT).show()
+            return@extract
+        }
+        val intent = Intent(context, PlayerActivity::class.java).apply {
+            putExtra(PlayerActivity.EXTRA_VIDEO_URL, videoUrl)
+            putExtra(PlayerActivity.EXTRA_TITLE, movie.title)
+            putExtra(PlayerActivity.EXTRA_POSTER_URL, movie.posterUrl)
+        }
+        context.startActivity(intent)
+    }
+}
+
+// ------------------------------------------------------------- Download
+
+/** Downloads one quality in the background with Android's own DownloadManager. */
+fun startDownload(context: Context, movie: Movie, link: QualityLink) {
+    val illegalChars = Regex("[\\\\/:*?\"<>|]")
+    val fileName = "${movie.title} [${link.label}].mp4".replace(illegalChars, "_")
+    val request = DownloadManager.Request(Uri.parse(link.url))
+        .setTitle(movie.title)
+        .setDescription(link.label)
+        .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+        .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName)
+        .setAllowedOverMetered(true)
+    val manager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+    manager.enqueue(request)
+    Toast.makeText(context, "Downloading ${link.label}…", Toast.LENGTH_SHORT).show()
 }
 
 // ------------------------------------------------------------- Theme
@@ -161,7 +216,6 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun MovieApp() {
     val nav = rememberNavController()
-    val context = LocalContext.current
     val movies = remember { sampleMovies } // TODO: replace with data from your server
 
     NavHost(navController = nav, startDestination = "grid") {
@@ -177,11 +231,7 @@ fun MovieApp() {
         ) { entry ->
             val movie = movies.firstOrNull { it.id == entry.arguments?.getString("id") }
             if (movie != null) {
-                MovieDetailScreen(
-                    movie = movie,
-                    onBack = { nav.popBackStack() },
-                    onQualityClick = { m, link -> onQualitySelected(context, m, link) },
-                )
+                MovieDetailScreen(movie = movie, onBack = { nav.popBackStack() })
             }
         }
     }
@@ -247,12 +297,13 @@ fun MovieCard(movie: Movie, onClick: () -> Unit) {
 
 // ------------------------------------------------------------- Detail screen
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MovieDetailScreen(
-    movie: Movie,
-    onBack: () -> Unit,
-    onQualityClick: (Movie, QualityLink) -> Unit,
-) {
+fun MovieDetailScreen(movie: Movie, onBack: () -> Unit) {
+    val context = LocalContext.current
+    var resolving by remember { mutableStateOf(false) }
+    var showDownloadSheet by remember { mutableStateOf(false) }
+
     Box(modifier = Modifier.fillMaxSize().background(Bg)) {
         Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
             Box(modifier = Modifier.fillMaxWidth().height(380.dp)) {
@@ -277,21 +328,45 @@ fun MovieDetailScreen(
                 Text(movie.synopsis, lineHeight = 21.sp, color = Color(0xFFD0D0D5))
                 Spacer(Modifier.height(24.dp))
 
-                Text("Choose quality", fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                Spacer(Modifier.height(10.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    movie.links.forEach { link ->
-                        Button(
-                            onClick = { onQualityClick(movie, link) },
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(12.dp),
-                            contentPadding = PaddingValues(vertical = 14.dp),
-                        ) {
-                            Icon(Icons.Filled.PlayArrow, contentDescription = null)
-                            Spacer(Modifier.width(4.dp))
-                            Text(link.label, fontWeight = FontWeight.Bold)
+                // Large Play button: resolves the video from sourcePageUrl, then
+                // hands it to PlayerActivity (ExoPlayer) — no browser ever shown.
+                Button(
+                    onClick = {
+                        if (!resolving) {
+                            resolving = true
+                            playMovie(context, movie) { resolving = false }
                         }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(vertical = 16.dp),
+                ) {
+                    if (resolving) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.height(20.dp).width(20.dp),
+                            color = Color.Black,
+                            strokeWidth = 2.dp,
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        Text("Finding video…", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    } else {
+                        Icon(Icons.Filled.PlayArrow, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Play", fontWeight = FontWeight.Bold, fontSize = 16.sp)
                     }
+                }
+                Spacer(Modifier.height(10.dp))
+
+                // Download button: opens the quality picker below.
+                OutlinedButton(
+                    onClick = { showDownloadSheet = true },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(vertical = 16.dp),
+                ) {
+                    Icon(Icons.Filled.Download, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Download", fontWeight = FontWeight.Bold, fontSize = 16.sp)
                 }
             }
         }
@@ -305,5 +380,47 @@ fun MovieDetailScreen(
         ) {
             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
         }
+    }
+
+    if (showDownloadSheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showDownloadSheet = false },
+            containerColor = Panel,
+        ) {
+            DownloadQualitySheet(
+                movie = movie,
+                onQualityPicked = { link ->
+                    startDownload(context, movie, link)
+                    showDownloadSheet = false
+                },
+            )
+        }
+    }
+}
+
+/** Lists 480p / 720p / 1080p (whatever [Movie.links] has); tap to download. */
+@Composable
+fun DownloadQualitySheet(movie: Movie, onQualityPicked: (QualityLink) -> Unit) {
+    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+        Text("Download", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(4.dp))
+        Text(movie.title, color = Color.Gray, fontSize = 13.sp)
+        Spacer(Modifier.height(16.dp))
+        movie.links.forEach { link ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onQualityPicked(link) }
+                    .padding(vertical = 14.dp),
+            ) {
+                Icon(Icons.Filled.Download, contentDescription = null, tint = Accent)
+                Spacer(Modifier.width(14.dp))
+                Column {
+                    Text(link.label, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+                    Text(movie.title, color = Color.Gray, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+        }
+        Spacer(Modifier.height(16.dp))
     }
 }

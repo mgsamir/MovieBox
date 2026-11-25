@@ -1,6 +1,7 @@
 package com.example.moviebox.extract
 
 import android.os.Bundle
+import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.media3.common.MediaItem
@@ -10,20 +11,30 @@ import com.example.moviestream.R
 
 /*
  * build.gradle.kts dependencies:
+ *   implementation("androidx.appcompat:appcompat:1.7.0")
  *   implementation("androidx.media3:media3-exoplayer:1.4.1")
  *   implementation("androidx.media3:media3-exoplayer-hls:1.4.1")
  *   implementation("androidx.media3:media3-ui:1.4.1")
  *
- * activity_player.xml needs one view:
- *   <androidx.media3.ui.PlayerView
- *       android:id="@+id/playerView"
- *       android:layout_width="match_parent"
- *       android:layout_height="match_parent" />
+ * Launch with a direct, already-resolved video URL (preferred — this is
+ * what MovieStreamUI.kt's playMovie() does after using PageExtractor):
+ *   Intent(context, PlayerActivity::class.java).apply {
+ *       putExtra(PlayerActivity.EXTRA_VIDEO_URL, videoUrl)
+ *       putExtra(PlayerActivity.EXTRA_TITLE, movie.title)
+ *       putExtra(PlayerActivity.EXTRA_POSTER_URL, movie.posterUrl)
+ *   }
  *
- * Pass the page URL in, e.g.:
- *   intent.putExtra("page_url", movie.sourceUrl)
+ * Or, if you only have a page to scrape and want PlayerActivity to do the
+ * extraction itself, pass EXTRA_PAGE_URL instead of EXTRA_VIDEO_URL.
  */
 class PlayerActivity : AppCompatActivity() {
+
+    companion object {
+        const val EXTRA_VIDEO_URL = "video_url"
+        const val EXTRA_PAGE_URL = "page_url"
+        const val EXTRA_TITLE = "title"
+        const val EXTRA_POSTER_URL = "poster_url"
+    }
 
     private var player: ExoPlayer? = null
 
@@ -32,13 +43,25 @@ class PlayerActivity : AppCompatActivity() {
         setContentView(R.layout.activity_player)
 
         val playerView = findViewById<PlayerView>(R.id.playerView)
-        val pageUrl = intent.getStringExtra("page_url") ?: return finishWithError()
+        val titleView = findViewById<TextView>(R.id.titleOverlay)
+
+        intent.getStringExtra(EXTRA_TITLE)?.let { title ->
+            titleView.text = title
+            titleView.visibility = android.view.View.VISIBLE
+        }
+
+        val directUrl = intent.getStringExtra(EXTRA_VIDEO_URL)
+        if (!directUrl.isNullOrBlank()) {
+            playVideo(playerView, directUrl)
+            return
+        }
+
+        val pageUrl = intent.getStringExtra(EXTRA_PAGE_URL)
+        if (pageUrl.isNullOrBlank()) return finishWithError()
 
         PageExtractor(this).extract(pageUrl) { result ->
             val videoUrl = result?.videoUrl
             if (videoUrl.isNullOrBlank()) {
-                // The page exposed only an <iframe>, not a direct <video> src.
-                // Resolve one level deeper if needed:
                 val iframeUrl = result?.iframeUrl
                 if (!iframeUrl.isNullOrBlank()) {
                     PageExtractor(this).extract(iframeUrl) { inner ->
