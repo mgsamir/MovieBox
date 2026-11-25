@@ -1,0 +1,37 @@
+name: MovieStream UI build
+
+on:
+  push:
+    paths:
+      - 'moviestream-ui/**'
+      - '.github/workflows/moviestream-build.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+      - name: Build debug APK
+        working-directory: moviestream-ui
+        run: |
+          set -o pipefail
+          gradle assembleDebug --no-daemon --stacktrace 2>&1 | tee ../gradle.log
+      - name: Show build error summary
+        if: failure()
+        run: |
+          if [ -f gradle.log ]; then
+            MSG=$(grep -E "^e: |error:|FAILED|What went wrong|Caused by" -A3 gradle.log | grep -v '^--$' | tail -n 40 | tr -d '\r' | sed 's/%/%25/g' | awk 'BEGIN{ORS="%0A"}{print}')
+            echo "::error title=Build log tail::$MSG"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: moviestream-ui-debug-apk
+          path: moviestream-ui/app/build/outputs/apk/debug/*.apk
